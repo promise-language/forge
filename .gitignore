@@ -1,0 +1,6 @@
+.DS_Store
+*.swp
+*.swo
+
+# Build outputs from `go build` / `go run` in this repo
+bin/
