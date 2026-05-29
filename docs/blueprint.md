@@ -17,9 +17,9 @@ The pattern originated in [`promise-language/promise`](https://github.com/promis
 ## 1. What the model gives you
 
 - **One bootstrap command** (`./make`) on a fresh clone: compiles every tool, enables git hooks, and is idempotent on subsequent runs.
-- **Native binaries under `bin/`** — `bin/build`, `bin/test`, `bin/verify`, `bin/format`, `bin/vet`, `bin/coverage`, `bin/stress`, `bin/setup`, `bin/prereqs`, `bin/guard`, `bin/precommit`. Each is a Go binary, ~5–10 MB, fast to invoke.
+- **Native binaries under `bin/`** — `bin/build`, `bin/test`, `bin/verify`, `bin/format`, `bin/vet`, `bin/coverage`, `bin/stress`, `bin/setup`, `bin/prereqs`, `bin/guard`, `bin/precommit`. Each is a Go binary, ~5–10 MB, fast to invoke. Project-specific executables — including flow / orchestration binaries like `bin/do` — are tools too: same discovery, same baked-in root, same staleness guard, no exemption (see §4–§5).
 - **A commit gate** (`bin/verify`) that runs the full pre-commit pipeline. The only thing a contributor needs to know is "run `bin/verify` before committing."
-- **A self-staleness check**: every tool embeds the FNV-128a hash of the tool-source tree at compile time. If the source has changed since the binary was built, the tool prints `tools source has changed — run: ./make` and exits non-zero.
+- **A self-staleness check**: every tool embeds the FNV-128a hash of the tool-source tree at compile time. If the source has changed since the binary was built, the tool prints `tools source has changed — run: ./make` and exits non-zero. This covers **every** discovered binary — flow binaries included — so a flow binary like `bin/do` refuses to run against drifted source exactly like `bin/verify` does.
 - **A single, cross-platform implementation**: no bash/PowerShell drift. Tools detect host OS at runtime when behavior must differ.
 - **A Claude Code guard hook** (`bin/guard`) that blocks dangerous Bash commands and forbidden Edit/Write patterns at the harness level.
 - **A git pre-commit hook** (`bin/precommit`) that rejects staged binaries and validates ratcheted quality metrics.
@@ -40,6 +40,7 @@ The pattern originated in [`promise-language/promise`](https://github.com/promis
 ├── bin/                       # gitignored — built tools land here
 │   ├── build, verify, test, format, vet, coverage, stress, setup, prereqs
 │   ├── guard, precommit
+│   ├── do, <flow-name>        # flow binaries — flat under bin/, tools like any other
 │   └── .tools.hash            # sidecar — tools source hash, drives the up-to-date check
 ├── .githooks/
 │   └── pre-commit             # trampoline that execs bin/precommit
@@ -74,13 +75,17 @@ The pattern originated in [`promise-language/promise`](https://github.com/promis
 │           ├── setup/main.go
 │           ├── prereqs/main.go
 │           ├── guard/main.go
-│           └── precommit/main.go
+│           ├── precommit/main.go
+│           ├── do/main.go            # flow binary → bin/do (a tool like any other)
+│           └── <flow-name>/main.go   # every flow's source lives here, nowhere else
 └── <project source>/          # the actual project — anything: Go, Rust, C++, JS, …
 ```
 
 **Why `.baselines.json` lives at the repo root**: it's a single committed file (~50 lines of JSON) that every contributor and CI run reads. Top-level, dot-prefixed matches the convention of `.editorconfig`, `.gitignore`, `.prettierrc` — machine-managed config that's discoverable on `ls` but visually quiet. `edit_gates.json` is a separate concern (Claude Code guard policy, not quality ratchets), so it lives under `.claude/` next to `settings.json` where the guard hook is wired up.
 
 **Why the repo root is baked into every binary at build time, not discovered at runtime:** Walking up from `cwd` looking for a sentinel file (the old design) breaks in three ways agents routinely trigger — `cwd` set outside the repo, `cwd` inside a *different* repo that has its own `./make`, or `cwd` inside a sub-checkout that has a sentinel-file collision. Baking the absolute path into each binary via `-ldflags "-X main.repoRoot=<abs>"` removes all three failure modes: the binary always knows its real repo regardless of `cwd`, regardless of what the surrounding filesystem looks like, regardless of how an agent invokes it. The cost is that binaries are tied to their source worktree — copying `bin/verify` from worktree A to worktree B leaves it pointing at A. That's the right semantics: it's the same binary, built for A. The fix is `./make` in worktree B, which costs ~1 second.
+
+**Flow binaries are tools, not a separate category.** A flow / orchestration binary (`bin/do`, `bin/<flow-name>`) is built from a `main.go` under `tools/build/cmd/` exactly like every other tool — `cmd/do/main.go` → `bin/do`, a flat sibling of `bin/build` and `bin/verify`, with no namespace of its own. Flow source **must** live at this canonical build-tools location and nowhere else: that is what puts it inside the `ToolsSourceHash` walk of `tools/build/`, so a flow's own source is part of the staleness hash automatically. There is no second build path and no flow-specific staleness exemption — that distinction is exactly what this model exists to avoid. A flow source tree kept outside `tools/build/` is not supported: it would be invisible to the hash, and the stale binary would run silently (see §5).
 
 Conventions that make this work:
 
@@ -135,7 +140,7 @@ Responsibilities, in order:
 
 Key properties:
 
-- **Tools are discovered, not enumerated.** Drop a new directory under `cmd/`, run `./make`, and you have a new `bin/<name>` binary. No registration step.
+- **Tools are discovered, not enumerated.** Drop a new directory under `cmd/` — a build tool or a flow binary, they're the same thing — run `./make`, and you have a new `bin/<name>` binary. Flow binaries are not a special case: `cmd/do` builds to `bin/do` just as `cmd/build` builds to `bin/build`. No registration step, no separate flow build.
 - **The hash sidecar is the staleness contract.** It's the same hash that's baked into each binary. If the sidecar is missing or stale, the next `./make` rebuilds; if the sidecar exists but a tool was deleted from `bin/`, the next `./make` rebuilds.
 - **Each binary is tied to its source worktree by construction.** The baked-in `repoRoot` is the absolute path of the worktree it was built in. Two worktrees of the same repo produce two distinct sets of binaries — there is no shared `bin/` that could point at the wrong tree.
 - **Trim path and strip symbols.** `-trimpath -ldflags "-s -w"` keeps binaries small and reproducible. (`-X` overrides survive `-s -w`; only the symbol table is stripped, not initialized data.)
@@ -192,6 +197,10 @@ func CheckStale(repoRoot, compiledHash string) {
 `ToolsSourceHash(repoRoot)` walks `<repoRoot>/tools/build/` recursively, collects every `.go`, `go.mod`, `go.sum` file (sorted by relative path), and computes an FNV-128a hash of `<relpath>\n<size>\n<contents>` for each. The size delimiter prevents file-boundary collisions.
 
 This single check is what makes "edit a tool → re-run `./make`" the one-and-only developer workflow. Without it, a stale binary can silently produce wrong results for hours. And because `repoRoot` is baked in, the check is anchored to the binary's actual source tree — copying `bin/verify` into a different repo doesn't trick the staleness check into re-hashing the wrong `tools/build/`.
+
+**Flow binaries are governed by this guard, with no exemption.** A flow binary such as `bin/do` has the identical `main.go` preamble — the `repoRoot` / `sourceHash` package vars and `common.CheckStale(repoRoot, sourceHash)` as its first call — so it refuses to run with `tools source has changed — run: ./make` the instant any tool source drifts from what it was built against. Because `ToolsSourceHash` walks the entire `tools/build/` tree, an edit to a flow's own source (`tools/build/cmd/do/`) bumps the hash exactly like an edit to `verify`'s would — a stale flow can never run against changed source. There is deliberately no separate "flow staleness" mechanism and no flow-specific opt-out: that distinction is precisely what this model exists to remove.
+
+The guard only holds where the hash can see the source — so flow source is **required** to live at the canonical build-tools location, `tools/build/cmd/<flow>/`, and nowhere else. That is not a suggestion: a flow source tree kept outside `tools/build/` (e.g. a top-level `flows/` module) would fall outside the `ToolsSourceHash` walk, an edit to it would leave the baked-in hash unchanged, and the stale binary would run silently — the exact failure the guard exists to prevent. Folding flows in therefore means moving their `main.go` under `tools/build/cmd/`, not widening the hash walk to chase sources scattered elsewhere. Keeping every tool's source under one hashed root is what makes "flows are tools" a guarantee rather than a convention.
 
 ---
 
@@ -398,7 +407,7 @@ The easiest path is `go run github.com/promise-language/forge/cmd/init@latest` i
 
 3. **Write `common/hash.go`, `stale.go`, `platform.go`, `exec.go`, `args.go`.** These are the load-bearing primitives. Either import `github.com/promise-language/forge/primitives` for the stable subset, or copy the source in directly. There is no `common/root.go` — root is baked into each tool's `main` by the meta-builder. Helpers that need root take it as a `repoRoot string` parameter.
 
-4. **Write `cmd/make/main.go`.** Just the meta-builder — discover `cmd/` subdirs, build each into `bin/`, write the hash sidecar, wire up git hooks via `RunSetup`.
+4. **Write `cmd/make/main.go`.** Just the meta-builder — discover `cmd/` subdirs, build each into `bin/`, write the hash sidecar, wire up git hooks via `RunSetup`. Flow binaries are discovered here too — a flow is just another `cmd/<name>` dir, requiring no special handling.
 
 5. **Add `./make` and `make.cmd` at the repo root.** Two-line trampolines (see §3).
 
@@ -443,6 +452,7 @@ The first 8 steps get you a working bootstrap; the remaining 7 get you the full 
 - **No silent failures.** Every error path returns a wrapped error with context. The verify summary always prints, even on failure, so an agent can grep the result without re-running.
 - **No tests-in-precommit-hook.** Tests run in `bin/verify` which the developer runs explicitly. The hook stays sub-second so it never gets disabled.
 - **No runtime dependency on Forge.** Once `cmd/init` has run, the project owns its tooling. Forge upstream changes do not affect existing adopters unless they explicitly pull in a new `primitives/` version.
+- **No separate "flow" tooling.** Flow / orchestration binaries are tools like any other — same `cmd/` discovery, same baked-in `repoRoot` / `sourceHash`, same `CheckStale` guard. A second build path or a staleness exemption for flows would reintroduce exactly the drift this model removes.
 
 ---
 
