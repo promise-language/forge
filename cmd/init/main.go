@@ -488,8 +488,10 @@ func RunVerify(repoRoot string, args []string) error {
 	fmt.Println("────────────────────────────────")
 
 	if failed {
+		fmt.Println("❌ Verify FAILED: not safe to commit")
 		return fmt.Errorf("verify failed")
 	}
+	fmt.Println("✅ OK to Commit")
 	return nil
 }
 
@@ -541,7 +543,7 @@ func RunPrecommit(repoRoot string) error {
 		}
 	}
 	if len(offenders) > 0 {
-		fmt.Fprintln(os.Stderr, "pre-commit: refusing to commit built binaries:")
+		fmt.Fprintln(os.Stderr, "❌ pre-commit: refusing to commit built binaries:")
 		for _, f := range offenders {
 			fmt.Fprintf(os.Stderr, "  %s\n", f)
 		}
