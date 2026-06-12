@@ -4,7 +4,7 @@ The design doc for Forge: the build / verify / gate tooling pattern, packaged as
 
 The model is one bootstrap script (`./make` / `.\make.cmd`) that compiles every dev tool out of a single in-repo Go module into `bin/`, plus a commit gate (`bin/verify`) that bundles format → build → vet → test into a single command. Each tool detects its own staleness and prompts the developer to re-run `./make`. Adopting this replaces the typical bash + PowerShell + Makefile mix with one source of truth, in Go, that is portable by construction.
 
-The pattern originated in [`promise-language/promise`](https://github.com/promise-language/promise) (the compiler's own dev tooling); Forge extracts the design so other projects can adopt it without copy-pasting. This document is language-agnostic for the target project — the tooling itself is Go because Go cross-compiles trivially and has no runtime dependency to install, but the tools can build, test, and verify a project written in any language.
+The pattern was distilled from a real compiler's dev tooling, where bash + PowerShell + Makefiles had drifted across platforms; Forge packages the design so other projects can adopt it without copy-pasting. This document is language-agnostic for the target project — the tooling itself is Go because Go cross-compiles trivially and has no runtime dependency to install, but the tools can build, test, and verify a project written in any language.
 
 ## What Forge ships
 
@@ -22,7 +22,7 @@ The pattern originated in [`promise-language/promise`](https://github.com/promis
 - **A self-staleness check**: every tool embeds the FNV-128a hash of the tool-source tree at compile time. If the source has changed since the binary was built, the tool prints `tools source has changed — run: ./make` and exits non-zero.
 - **A single, cross-platform implementation**: no bash/PowerShell drift. Tools detect host OS at runtime when behavior must differ.
 - **A Claude Code guard hook** (`bin/guard`) that blocks dangerous Bash commands and forbidden Edit/Write patterns at the harness level.
-- **A git pre-commit hook** (`bin/precommit`) that rejects staged binaries and validates ratcheted quality metrics.
+- **A git pre-commit hook** (`bin/precommit`) that rejects staged binaries, enforces GitHub noreply commit identities, keeps the tree source-only (no binary or oversized blobs), and validates ratcheted quality metrics.
 - **Ratcheted baselines** (`.baselines.json` at the repo root) — committed metrics (test count, leak count, coverage, binary size) that can only move in the approved direction, enforced on every commit.
 - **Deterministic repo-root resolution.** `./make` computes the absolute repo root at bootstrap time and bakes it into every compiled tool via `-ldflags "-X main.repoRoot=<abs>"`. Each binary already knows where its repo lives — no runtime walk-up, no sentinel-file scan, no `os.Executable()` games. Robust to cwd changes, subdirectory invocations, agents that move around the filesystem, and binaries copied into other repos (they still point at their birth-repo). The only tool that resolves root at runtime is the meta-builder itself (it runs via `go run`, so ldflags don't apply), and the `./make` trampoline `cd`s it into a known path first.
 - **An in-tree gate registry: `project.toml`.** Declares which gates exist, which `bin/gate` subcommand runs each, on what schedule (commit / nightly / weekly / on-demand), and which metric names from `.baselines.json` they produce. The project owns its gate definitions; trackers / CI schedulers read this file rather than defining gates externally.
@@ -263,11 +263,13 @@ Key design choices in `verify.go`:
 
 `bin/precommit` is fast (<50 ms) and enforces invariants that don't require running tests:
 
-- **Block committed binaries.** A hard-coded list of paths (`bin/<your-binary>`, etc.) — if any is staged, fail with a `git reset HEAD <path>` hint.
+- **Block committed binaries under `bin/`.** Anything staged at `bin` or under `bin/` (gitignored, built by `./make`) fails with a `git reset HEAD <path>` hint.
+- **Enforce GitHub noreply commit identities.** Both the author and committer email must end in `@users.noreply.github.com`, which keeps a personal address out of the public history. The check reads `git var GIT_AUTHOR_IDENT` / `GIT_COMMITTER_IDENT` — git's own resolution, honoring `GIT_*_EMAIL` env vars and `user.email` config alike — so it judges exactly the identities the impending commit will record, not a guess. (The domain is the one project-policy knob here; swap it if your project uses a different identity convention.)
+- **Reject binary blobs and oversized files.** The repo is source-only. Each staged file's *index* content is inspected via `git cat-file` (`:<path>` reads the staged blob, so it judges exactly what would be committed): reject any blob with a NUL byte in its first 16 KiB (git's own binary heuristic, widened) or larger than 256 KiB. Catches accidentally-staged images, vendored archives, and build artifacts before they bloat history. Deletions and submodule gitlinks are skipped; rename/copy entries are judged by their destination path.
 - **Block forbidden patterns** in staged diffs (e.g., `allow_leaks: true`, `TODO(remove me)`, `console.log`).
 - **Validate ratcheted baselines.** If `.baselines.json` is staged, parse both the HEAD and staged versions and reject any metric that moved in the wrong direction.
 
-The hook is intentionally light. Anything that requires running tests belongs in `bin/verify`, which the developer runs explicitly before committing. Putting test execution in the hook makes commits slow and gets the hook disabled — which kills the whole gate.
+The first three checks are language-agnostic and ship in the scaffolded starter; the last two are sketches you grow into. The hook is intentionally light. Anything that requires running tests belongs in `bin/verify`, which the developer runs explicitly before committing. Putting test execution in the hook makes commits slow and gets the hook disabled — which kills the whole gate.
 
 ---
 
@@ -414,7 +416,7 @@ The easiest path is `go run github.com/promise-language/forge/cmd/init@latest` i
 
 11. **Write `cmd/verify/main.go` + `common/verify.go`.** The orchestrator. Format → build → vet → test, with a summary block printed unconditionally and a global file lock.
 
-12. **Write `cmd/precommit/main.go` + `common/precommit.go`.** Block staged binaries; block forbidden patterns; validate `.baselines.json` ratchet direction.
+12. **Write `cmd/precommit/main.go` + `common/precommit.go`.** The scaffolder ships three language-agnostic checks: block staged binaries under `bin/`, enforce GitHub noreply author/committer identities, and reject binary or oversized blobs (source-only tree). Grow it with project-specific checks — forbidden-pattern scans and `.baselines.json` ratchet-direction validation.
 
 13. **Add `project.toml`** at the repo root when you're ready to define your first gate. Start with one gate definition (typically `tests`) wired to the `bin/gate test` runner. Root resolution does not depend on this file — adoption can be gradual.
 
@@ -446,16 +448,20 @@ The first 8 steps get you a working bootstrap; the remaining 7 get you the full 
 
 ---
 
-## 15. Reference — the worked example
+## 15. Reference — the runnable implementation
 
-The pattern was extracted from [`promise-language/promise`](https://github.com/promise-language/promise). The cross-references below point at that repo's current code. A few of those paths reflect Promise's pre-Forge layout; the blueprint normalizes them (see notes).
+This blueprint ships its own worked example: the [`cmd/init`](../cmd/init/main.go) scaffolder embeds every file described above as a string constant and writes a complete, runnable tooling tree into a target repo. Read the scaffolder to see the exact source the doc prescribes — it is the single source of truth, kept in lockstep with this document.
 
-- Bootstrap: [`make`](https://github.com/promise-language/promise/blob/master/make), [`make.cmd`](https://github.com/promise-language/promise/blob/master/make.cmd), [`tools/build/cmd/make/main.go`](https://github.com/promise-language/promise/blob/master/tools/build/cmd/make/main.go)
-- Common library: [`tools/build/common/`](https://github.com/promise-language/promise/tree/master/tools/build/common)
-- Staleness: [`stale.go`](https://github.com/promise-language/promise/blob/master/tools/build/common/stale.go), [`hash.go`](https://github.com/promise-language/promise/blob/master/tools/build/common/hash.go)
-- Root detection: [`root.go`](https://github.com/promise-language/promise/blob/master/tools/build/common/root.go) *(Promise today walks up looking for `catalog.toml`; the blueprint replaces this with ldflags-injected `main.repoRoot` and removes the FindRoot helper entirely)*
-- Verify pipeline: [`verify.go`](https://github.com/promise-language/promise/blob/master/tools/build/common/verify.go)
-- Pre-commit: [`.githooks/pre-commit`](https://github.com/promise-language/promise/blob/master/.githooks/pre-commit), [`precommit.go`](https://github.com/promise-language/promise/blob/master/tools/build/common/precommit.go)
-- Guard hook: [`cmd/guard/main.go`](https://github.com/promise-language/promise/blob/master/tools/build/cmd/guard/main.go), [`edit_gates.json`](https://github.com/promise-language/promise/blob/master/tools/gates/edit_gates.json) *(Promise today; the blueprint moves this to `.claude/edit_gates.json`)*
-- Baselines: [`baselines.json`](https://github.com/promise-language/promise/blob/master/tools/gates/baselines.json) *(Promise today; the blueprint moves this to `.baselines.json` at the repo root)*, [`gate.go`](https://github.com/promise-language/promise/blob/master/tools/build/common/gate.go), [`commitgate.go`](https://github.com/promise-language/promise/blob/master/tools/build/common/commitgate.go)
-- Existing tooling overview in Promise: [`docs/build-tools.md`](https://github.com/promise-language/promise/blob/master/docs/build-tools.md)
+Where each piece lives in [`cmd/init/main.go`](../cmd/init/main.go):
+
+- Bootstrap: the `makeSh` / `makeCmd` constants (`./make`, `make.cmd`) and the `cmdMakeGo` constant (the meta-builder).
+- Common library: the `platformGo`, `execGo`, `argsGo`, `hashGo`, `staleGo`, `setupGo`, `verifyGo`, `precommitGo`, and `guardGo` constants — written into `tools/build/common/`.
+- Staleness & root: `staleGo` + `hashGo`. There is no `root.go` — the root is baked into each binary via ldflags by the meta-builder (see §4–§5), so no runtime walk-up exists.
+- Verify pipeline: `verifyGo` (a language-detecting example pipeline; adopters replace `verifySteps` with their real commands).
+- Pre-commit: the `preCommitHook` trampoline and `precommitGo` (staged-binary, noreply-identity, and source-only blob checks — see §8).
+- Guard hook: `cmdGuardGo` + `guardGo`, wired by the `settingsJSON` constant into `.claude/settings.json`.
+- Agent-facing workflow doc: the `buildDocRaw` constant, appended to `CLAUDE.md` so the `./make` → `bin/verify` loop is discoverable.
+
+The gate registry (`project.toml`, §10) and ratcheted baselines (`.baselines.json` with `gate.go` / `commitgate.go`, §11) are described in this doc as the model to grow into; they are not part of the starter the scaffolder emits, so adopt them by following §10–§11 directly.
+
+The reusable, low-churn subset of the common helpers is also published as the importable [`primitives/`](../primitives/) package, for adopters who would rather depend on it than copy the scaffolded source.

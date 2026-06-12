@@ -24,8 +24,10 @@
 //     project-specific by nature — every project's verify pipeline runs a
 //     different formatter, builder, test runner. They belong in each
 //     adopter's own tools/build/common/.
-//   - Anything project-specific (Promise's WASM tests, Promise's LLVM
+//   - Anything project-specific (a project's WASM test pass, its toolchain
 //     detection, …).
 //
-// TODO(forge): extract from promise-language/promise's tools/build/common/.
+// The canonical implementations of these helpers are the ones cmd/init
+// scaffolds into a target repo's tools/build/common/; this package factors out
+// the low-churn subset for adopters who would rather import than copy.
 package primitives

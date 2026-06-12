@@ -22,7 +22,7 @@ After `./make`, the project owns its tooling. Forge is not a runtime dependency 
 
 ## Design philosophy
 
-The blueprint exists because the Promise compiler had bash + PowerShell + Makefiles drifting across platforms. The fix was one Go module that compiles every dev tool into `bin/`, with one `./make` bootstrap. That pattern generalizes; Forge is the generalized version, plus a scaffolder so adopters don't copy-paste from the doc.
+The blueprint exists because a real compiler project had bash + PowerShell + Makefiles drifting across platforms. The fix was one Go module that compiles every dev tool into `bin/`, with one `./make` bootstrap. That pattern generalizes; Forge is the generalized version, plus a scaffolder so adopters don't copy-paste from the doc.
 
 The design optimizes for:
 
