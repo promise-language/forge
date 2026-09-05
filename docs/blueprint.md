@@ -1,5 +1,8 @@
 # Dev Tooling Blueprint
 
+> **Tag:** `blueprint` — remaining work to complete this document: the query named in
+> [`docs/index.md`](index.md).
+
 The design doc for Forge: the build / verify / gate tooling pattern, packaged as a generic recipe and scaffolder.
 
 The model is one bootstrap script (`./make` / `.\make.cmd`) that compiles every dev tool out of a single in-repo Go module into `bin/`, plus a commit gate (`bin/verify`) that bundles format → build → vet → test into a single command. Each tool detects its own staleness and prompts the developer to re-run `./make`. Adopting this replaces the typical bash + PowerShell + Makefile mix with one source of truth, in Go, that is portable by construction.
