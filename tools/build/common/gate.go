@@ -158,8 +158,14 @@ type Envelope struct {
 // gateDef is either a leaf that measures, or a composition of other gates.
 type gateDef struct {
 	summary string
-	measure func(repoRoot string) ([]Metric, string, error)
+	measure func(repoRoot string, mods []string) ([]Metric, string, error)
 	parts   []string
+	// narrows says the gate accepts an instance naming ONE module, so a step
+	// that broke one module's suite can re-run that suite instead of paying for
+	// every module each round. A gate whose subject is not a module does not
+	// narrow, and offering `formatted:root` would advertise a narrowing that
+	// does not exist.
+	narrows bool
 }
 
 // gates is CLOSED. A name absent from this map is refused rather than guessed
@@ -176,18 +182,22 @@ var gates = map[string]gateDef{
 	"builds": {
 		summary: "packages that fail to compile",
 		measure: measureBuilds,
+		narrows: true,
 	},
 	"checked": {
 		summary: "go vet diagnostics",
 		measure: measureChecked,
+		narrows: true,
 	},
 	"tested": {
 		summary: "failing tests and failing packages",
 		measure: measureTested,
+		narrows: true,
 	},
 	"covered": {
-		summary: "statement coverage over the module",
+		summary: "statement coverage over the modules",
 		measure: measureCovered,
+		narrows: true,
 	},
 	// integration is what a decision rests on: the whole, measured at once.
 	// Its parts stay separately runnable, and that is a requirement rather
@@ -207,8 +217,10 @@ var gates = map[string]gateDef{
 	},
 }
 
-// GateNames returns every gate this project provides, sorted, for usage text.
-func GateNames() []string {
+// GateConcepts returns every gate concept this project provides, sorted. It is
+// the vocabulary without the instances — what usage text lists, so a reader sees
+// seven gates and a rule for narrowing them rather than a wall of names.
+func GateConcepts() []string {
 	names := make([]string, 0, len(gates))
 	for n := range gates {
 		names = append(names, n)
@@ -217,11 +229,101 @@ func GateNames() []string {
 	return names
 }
 
-// GateSummary returns the one-line description of a gate, or "" if unknown.
-func GateSummary(name string) string { return gates[name].summary }
+// GateNames returns every name this project answers: each concept, and for the
+// ones that narrow, `concept:instance` for every module. This is what `-list`
+// prints, because the SDK discovers what it may ask for by asking — so a name
+// missing here is a name nothing will ever request.
+func GateNames(repoRoot string) []string {
+	labels := ModuleLabels(repoRoot)
+	out := make([]string, 0, len(gates)*(1+len(labels)))
+	for _, c := range GateConcepts() {
+		out = append(out, c)
+		if !gates[c].narrows {
+			continue
+		}
+		for _, l := range labels {
+			out = append(out, c+":"+l)
+		}
+	}
+	return out
+}
 
-// KnownGate reports whether this project provides a gate by that name.
-func KnownGate(name string) bool { _, ok := gates[name]; return ok }
+// GateSummary returns the one-line description of a gate, or "" if unknown. An
+// instance carries its concept's summary: `tested:root` measures what `tested`
+// measures, in one module.
+func GateSummary(name string) string {
+	concept, _ := splitGateName(name)
+	return gates[concept].summary
+}
+
+// KnownGate reports whether this project answers that name — concept and, when
+// one is given, instance. Both halves are checked here rather than at the point
+// of measuring, so every entry point refuses the same set.
+func KnownGate(repoRoot, name string) bool {
+	concept, instance := splitGateName(name)
+	def, ok := gates[concept]
+	if !ok {
+		return false
+	}
+	if instance == "" {
+		return true
+	}
+	if !def.narrows {
+		return false
+	}
+	_, err := modulesFor(repoRoot, instance)
+	return err == nil
+}
+
+// splitGateName divides `concept:instance`. A name with no colon is all concept.
+func splitGateName(name string) (concept, instance string) {
+	if i := strings.Index(name, ":"); i >= 0 {
+		return name[:i], name[i+1:]
+	}
+	return name, ""
+}
+
+// moduleLabel is the instance name for a module directory: "root" for the
+// repository root, else the relative path with separators flattened, so
+// tools/build is addressed as `tools-build` and a name needs no quoting.
+func moduleLabel(repoRoot, dir string) string {
+	if dir == repoRoot {
+		return "root"
+	}
+	rel, err := filepath.Rel(repoRoot, dir)
+	if err != nil {
+		return ""
+	}
+	return strings.ReplaceAll(filepath.ToSlash(rel), "/", "-")
+}
+
+// ModuleLabels names every module a gate can be narrowed to, in the order
+// modules are measured.
+func ModuleLabels(repoRoot string) []string {
+	dirs := modules(repoRoot)
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		out = append(out, moduleLabel(repoRoot, d))
+	}
+	return out
+}
+
+// modulesFor resolves an instance to the modules it names. An empty instance
+// means every module — the safe reading, since a gate that quietly measured a
+// subset would report a tree sound while part of it was unmeasured.
+func modulesFor(repoRoot, instance string) ([]string, error) {
+	dirs := modules(repoRoot)
+	if instance == "" {
+		return dirs, nil
+	}
+	for _, d := range dirs {
+		if moduleLabel(repoRoot, d) == instance {
+			return []string{d}, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown instance %q (this project has: %s)",
+		instance, strings.Join(ModuleLabels(repoRoot), ", "))
+}
 
 // MeasureGate runs one gate and returns what it measured.
 //
@@ -230,13 +332,21 @@ func KnownGate(name string) bool { _, ok := gates[name]; return ok }
 // three failing tests is a successful run of the `tested` gate, and the
 // envelope says so.
 func MeasureGate(repoRoot, name string) (Envelope, error) {
-	def, ok := gates[name]
+	concept, instance := splitGateName(name)
+	def, ok := gates[concept]
 	if !ok {
 		return Envelope{}, fmt.Errorf("no gate named %q in this project", name)
 	}
+	if instance != "" && !def.narrows {
+		return Envelope{}, fmt.Errorf("gate %q: %s takes no instance — its subject is not a module", name, concept)
+	}
+	mods, err := modulesFor(repoRoot, instance)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("gate %q: %w", name, err)
+	}
 	env := Envelope{Gate: name, Metrics: []Metric{}}
 	if def.measure != nil {
-		metrics, incomplete, err := def.measure(repoRoot)
+		metrics, incomplete, err := def.measure(repoRoot, mods)
 		if err != nil {
 			return Envelope{}, err
 		}
@@ -270,7 +380,7 @@ func MeasureGate(repoRoot, name string) (Envelope, error) {
 // not be able to get different answers and both be right — so an unknown flag
 // is refused rather than ignored, and a second name is refused rather than
 // silently dropped.
-func ParseGateArgs(args []string) (name string, envelope bool, err error) {
+func ParseGateArgs(repoRoot string, args []string) (name string, envelope bool, err error) {
 	for _, a := range NormalizeArgs(args) {
 		switch {
 		case a == "-envelope":
@@ -284,10 +394,10 @@ func ParseGateArgs(args []string) (name string, envelope bool, err error) {
 		}
 	}
 	if name == "" {
-		return "", false, fmt.Errorf("no gate named; known gates: %s", strings.Join(GateNames(), ", "))
+		return "", false, fmt.Errorf("no gate named; known gates: %s", strings.Join(GateNames(repoRoot), ", "))
 	}
-	if !KnownGate(name) {
-		return "", false, unknownGate(name)
+	if !KnownGate(repoRoot, name) {
+		return "", false, unknownGate(repoRoot, name)
 	}
 	return name, envelope, nil
 }
@@ -295,14 +405,14 @@ func ParseGateArgs(args []string) (name string, envelope bool, err error) {
 // unknownGate is the refusal every entry point gives for a name this project
 // does not have. One wording, because a caller that mistyped a gate name is
 // told the same thing whichever program it typed it at.
-func unknownGate(name string) error {
+func unknownGate(repoRoot, name string) error {
 	return fmt.Errorf("no gate named %q in this project; known gates: %s",
-		name, strings.Join(GateNames(), ", "))
+		name, strings.Join(GateNames(repoRoot), ", "))
 }
 
 // measureFormatted counts files gofmt would rewrite. `-l` lists them; `-w`
 // would repair them, which is verify's job and not a gate's.
-func measureFormatted(repoRoot string) ([]Metric, string, error) {
+func measureFormatted(repoRoot string, _ []string) ([]Metric, string, error) {
 	out, err := gateOutput(repoRoot, "gofmt", "-l", ".")
 	if err != nil && out == "" {
 		return nil, "", fmt.Errorf("gofmt: %w", err)
@@ -329,9 +439,9 @@ func modules(repoRoot string) []string {
 // measureBuilds counts packages that fail to compile. `go build` prefixes each
 // failing package with a "# " header line on stderr, so the headers are the
 // count.
-func measureBuilds(repoRoot string) ([]Metric, string, error) {
+func measureBuilds(_ string, mods []string) ([]Metric, string, error) {
 	n := 0
-	for _, dir := range modules(repoRoot) {
+	for _, dir := range mods {
 		_, stderr, err := gateValue(dir, "go", "build", "./...")
 		found := countPrefixed(stderr, "# ")
 		if err != nil && found == 0 {
@@ -347,9 +457,9 @@ func measureBuilds(repoRoot string) ([]Metric, string, error) {
 // measureChecked counts go vet diagnostics — the lines naming a file and a
 // position, as distinct from the "# package" headers that group them. The
 // diagnostics are on stderr.
-func measureChecked(repoRoot string) ([]Metric, string, error) {
+func measureChecked(_ string, mods []string) ([]Metric, string, error) {
 	n := 0
-	for _, dir := range modules(repoRoot) {
+	for _, dir := range mods {
 		_, stderr, err := gateValue(dir, "go", "vet", "./...")
 		found := countDiagnostics(stderr)
 		if err != nil && found == 0 {
@@ -363,9 +473,9 @@ func measureChecked(repoRoot string) ([]Metric, string, error) {
 // measureTested counts failing tests and failing packages. Both are worth
 // having: one failing test in one package and forty in forty are different
 // situations, and a single number cannot tell them apart.
-func measureTested(repoRoot string) ([]Metric, string, error) {
+func measureTested(_ string, mods []string) ([]Metric, string, error) {
 	tests, pkgs := 0, 0
-	for _, dir := range modules(repoRoot) {
+	for _, dir := range mods {
 		out, err := gateOutput(dir, "go", "test", "./...")
 		t := countPrefixed(out, "--- FAIL:")
 		p := countPrefixed(out, "FAIL\t")
@@ -389,35 +499,85 @@ func measureTested(repoRoot string) ([]Metric, string, error) {
 // gate that dropped it in the worktree would have modified the subject it was
 // measuring — untracked, but a difference all the same, and the runner's
 // non-modification check cannot be asked to guess which stray files were meant.
-func measureCovered(repoRoot string) ([]Metric, string, error) {
-	dir, err := os.MkdirTemp("", "flow-gate-cover-")
+func measureCovered(_ string, mods []string) ([]Metric, string, error) {
+	dir, err := os.MkdirTemp("", "forge-gate-cover-")
 	if err != nil {
 		return nil, "", fmt.Errorf("coverage: %w", err)
 	}
 	defer os.RemoveAll(dir)
-	profile := filepath.Join(dir, "coverage.out")
 
-	_, testErr := gateOutput(repoRoot, "go", "test", "-coverprofile="+profile, "./...")
-	if _, err := os.Stat(profile); err != nil {
-		return nil, "", fmt.Errorf("coverage: no profile was produced: %w", testErr)
-	}
-	out, err := gateOutput(repoRoot, "go", "tool", "cover", "-func="+profile)
-	if err != nil {
-		return nil, "", fmt.Errorf("go tool cover: %w: %s", err, firstLine(out))
-	}
-	pct, ok := totalCoverage(out)
-	if !ok {
-		return nil, "", fmt.Errorf("coverage: could not read a total from `go tool cover -func`")
-	}
-	// Failing tests do not stop coverage from being reported, but they DO mean
-	// this run measured less than a green one: a package whose tests failed
-	// contributes whatever ran before the failure. Saying so is what keeps the
-	// number from being read as a drop in coverage.
+	var stmts, hit int64
 	incomplete := ""
-	if testErr != nil {
-		incomplete = "some packages failed their tests, so their statements were only partly exercised"
+	for i, mod := range mods {
+		profile := filepath.Join(dir, fmt.Sprintf("cover-%d.out", i))
+		_, testErr := gateOutput(mod, "go", "test", "-coverprofile="+profile, "./...")
+		if _, err := os.Stat(profile); err != nil {
+			return nil, "", fmt.Errorf("coverage: no profile was produced in %s: %w", mod, testErr)
+		}
+		s, h, err := coverageCounts(profile)
+		if err != nil {
+			return nil, "", err
+		}
+		stmts += s
+		hit += h
+		// Failing tests do not stop coverage from being reported, but they DO
+		// mean this run measured less than a green one: a package whose tests
+		// failed contributes whatever ran before the failure. Saying so is what
+		// keeps the number from being read as a drop in coverage.
+		if testErr != nil {
+			incomplete = "some packages failed their tests, so their statements were only partly exercised"
+		}
 	}
+	if stmts == 0 {
+		return nil, "", fmt.Errorf("coverage: the profiles named no statements")
+	}
+	pct := 100 * float64(hit) / float64(stmts)
 	return []Metric{Quantity("statement_coverage", pct, "percent")}, incomplete, nil
+}
+
+// coverageCounts sums statements and covered statements out of one coverprofile.
+// Every line after the mode header is
+//
+//	<file>:<startLine>.<startCol>,<endLine>.<endCol> <numStmt> <count>
+//
+// and the counts come from there rather than from `go tool cover -func`, which
+// prints a percentage and not the statement counts behind it.
+//
+// The counts are what make a figure spanning modules truthful. Percentages from
+// two modules cannot be averaged: a module holding three statements would weigh
+// the same as one holding three thousand, so a tiny well-tested module would
+// hide an untested large one. Summing statements first is the only combination
+// that means what it says.
+func coverageCounts(path string) (stmts, hit int64, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, fmt.Errorf("coverage: reading %s: %w", path, err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "mode:") {
+			continue
+		}
+		// Split from the right: a file path may itself contain spaces, but the
+		// two trailing fields never do.
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			return 0, 0, fmt.Errorf("coverage: %s: cannot read a profile line: %q", path, line)
+		}
+		n, err := strconv.ParseInt(fields[len(fields)-2], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("coverage: %s: statement count in %q: %w", path, line, err)
+		}
+		count, err := strconv.ParseInt(fields[len(fields)-1], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("coverage: %s: execution count in %q: %w", path, line, err)
+		}
+		stmts += n
+		if count > 0 {
+			hit += n
+		}
+	}
+	return stmts, hit, nil
 }
 
 // measureFit reports the space available where this project's work writes.
@@ -432,7 +592,7 @@ func measureCovered(repoRoot string) ([]Metric, string, error) {
 // where the toolchain writes what it reuses. Both are reported every run even
 // when they resolve to the same filesystem — an envelope whose shape varied by
 // host is one no threshold can be written against.
-func measureFit(repoRoot string) ([]Metric, string, error) {
+func measureFit(repoRoot string, _ []string) ([]Metric, string, error) {
 	free, err := freeBytesNear(repoRoot)
 	if err != nil {
 		return nil, "", fmt.Errorf("free space at %s: %w", repoRoot, err)

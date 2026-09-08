@@ -34,9 +34,12 @@ func usage() string {
 	sb.WriteString("own measurement would be the runner, and the runner comes from outside the\n")
 	sb.WriteString("tree.\n\n")
 	sb.WriteString("Gates:\n")
-	for _, n := range common.GateNames() {
+	for _, n := range common.GateConcepts() {
 		fmt.Fprintf(&sb, "  %-12s %s\n", n, common.GateSummary(n))
 	}
+	sb.WriteString("\nA name is a concept, optionally with an instance naming one module:\n")
+	fmt.Fprintf(&sb, "  %s\n", strings.Join(common.ModuleLabels(repoRoot), ", "))
+	sb.WriteString("Omitting the instance measures every module.\n")
 	capped := common.CappedMetrics(repoRoot)
 	if len(capped) > 0 {
 		fmt.Fprintf(&sb, "\nJudged against a cap: %s\n", strings.Join(capped, ", "))
@@ -55,7 +58,7 @@ func main() {
 	}
 	common.CheckStale(repoRoot, sourceHash)
 
-	name, verdict, err := common.ParseRunArgs(args)
+	name, verdict, err := common.ParseRunArgs(repoRoot, args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v; run `%s -h` for usage\n", err, os.Args[0])
 		os.Exit(2)

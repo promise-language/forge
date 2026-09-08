@@ -88,8 +88,8 @@ func loadManifest(repoRoot string) (map[string]Threshold, error) {
 // boundary (prints to stdout, exits without an envelope, hangs) is broken here
 // too, where a person can see it.
 func RunOneGate(repoRoot, gateBin, name string) error {
-	if !KnownGate(name) {
-		return unknownGate(name)
+	if !KnownGate(repoRoot, name) {
+		return unknownGate(repoRoot, name)
 	}
 
 	cmd := exec.Command(gateBin, name, "--envelope")
@@ -185,8 +185,8 @@ func judge(env Envelope, manifest map[string]Threshold) (acceptable bool, thresh
 // a half-written verdict beside an error message is a second channel, and the
 // two could disagree.
 func JudgeStdin(repoRoot, name string, in io.Reader, out io.Writer) error {
-	if !KnownGate(name) {
-		return unknownGate(name)
+	if !KnownGate(repoRoot, name) {
+		return unknownGate(repoRoot, name)
 	}
 	envelope, err := io.ReadAll(in)
 	if err != nil {
@@ -237,7 +237,7 @@ type verdictWire struct {
 // refused rather than ignored, and a second name refused rather than dropped.
 // A caller that meant --verdict and mistyped it must not silently get the
 // measuring mode, which spawns a gate.
-func ParseRunArgs(args []string) (name string, verdict bool, err error) {
+func ParseRunArgs(repoRoot string, args []string) (name string, verdict bool, err error) {
 	for _, a := range NormalizeArgs(args) {
 		switch {
 		case a == "-verdict":
@@ -251,10 +251,10 @@ func ParseRunArgs(args []string) (name string, verdict bool, err error) {
 		}
 	}
 	if name == "" {
-		return "", false, fmt.Errorf("no gate named; known gates: %s", strings.Join(GateNames(), ", "))
+		return "", false, fmt.Errorf("no gate named; known gates: %s", strings.Join(GateNames(repoRoot), ", "))
 	}
-	if !KnownGate(name) {
-		return "", false, unknownGate(name)
+	if !KnownGate(repoRoot, name) {
+		return "", false, unknownGate(repoRoot, name)
 	}
 	return name, verdict, nil
 }

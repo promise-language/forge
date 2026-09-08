@@ -18,7 +18,7 @@ func TestUnknownGateIsRefusedRatherThanEmpty(t *testing.T) {
 	if _, err := MeasureGate(t.TempDir(), "lint"); err == nil {
 		t.Fatal("MeasureGate accepted a gate this project does not provide")
 	}
-	if _, _, err := ParseGateArgs([]string{"lint", "--envelope"}); err == nil {
+	if _, _, err := ParseGateArgs(t.TempDir(), []string{"lint", "--envelope"}); err == nil {
 		t.Fatal("ParseGateArgs accepted an unknown gate name")
 	}
 }
@@ -36,7 +36,7 @@ func TestCompositionPartsAreThemselvesGates(t *testing.T) {
 		t.Fatal("integration composes nothing")
 	}
 	for _, part := range def.parts {
-		if !KnownGate(part) {
+		if !KnownGate(t.TempDir(), part) {
 			t.Errorf("integration composes %q, which is not a gate anyone can ask for", part)
 		}
 	}
@@ -66,7 +66,7 @@ func TestGateInvocationIsOneWay(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			name, env, err := ParseGateArgs(tc.args)
+			name, env, err := ParseGateArgs(t.TempDir(), tc.args)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("ParseGateArgs(%q) = (%q, %v, nil), want an error", tc.args, name, env)
@@ -237,7 +237,7 @@ func TestFitReportsBothFilesystemsWhenTheyAreOneDevice(t *testing.T) {
 	}
 	fakeGo(t, "echo "+cache)
 
-	metrics, incomplete, err := measureFit(root)
+	metrics, incomplete, err := measureFit(root, nil)
 	if err != nil {
 		t.Fatalf("measureFit: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestFitReportsBothFilesystemsWhenTheyAreOneDevice(t *testing.T) {
 // complete measurement of a machine with less to check.
 func TestFitReportsIncompleteWhenTheBuildCacheIsUnknown(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // `go` is now unresolvable
-	metrics, incomplete, err := measureFit(t.TempDir())
+	metrics, incomplete, err := measureFit(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("measureFit gave up entirely; the worktree was still measurable: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestFitDoesNotReadTheToolchainsDiagnosticsAsAPath(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fakeGo(t, c.script)
-			metrics, incomplete, err := measureFit(t.TempDir())
+			metrics, incomplete, err := measureFit(t.TempDir(), nil)
 			if err != nil {
 				t.Fatalf("measureFit gave up entirely; the worktree was still measurable: %v", err)
 			}
@@ -430,7 +430,7 @@ func TestFitModifiesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := measureFit(dir); err != nil {
+	if _, _, err := measureFit(dir, nil); err != nil {
 		t.Fatalf("measureFit: %v", err)
 	}
 	after, err := os.ReadDir(dir)

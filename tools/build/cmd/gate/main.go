@@ -30,9 +30,13 @@ func usage() string {
 	sb.WriteString("would be read as a pass by the first script that wrapped it, and a gate has\n")
 	sb.WriteString("no verdict to give. Run `run <name>` for a result meant for a person.\n\n")
 	sb.WriteString("Gates:\n")
-	for _, n := range common.GateNames() {
+	for _, n := range common.GateConcepts() {
 		fmt.Fprintf(&sb, "  %-12s %s\n", n, common.GateSummary(n))
 	}
+	sb.WriteString("\nA name is a concept, optionally with an instance naming one module:\n")
+	fmt.Fprintf(&sb, "  %s\n", strings.Join(common.ModuleLabels(repoRoot), ", "))
+	sb.WriteString("Omitting the instance measures every module. `--list` prints every name\n")
+	sb.WriteString("this project answers, instances included.\n")
 	return sb.String()
 }
 
@@ -68,7 +72,7 @@ func main() {
 	// cannot answer reports a project with no gates, which is the truth about
 	// this machine and exactly what `doctor` needs to say.
 	if isListArg(args) {
-		for _, n := range common.GateNames() {
+		for _, n := range common.GateNames(repoRoot) {
 			fmt.Println(n)
 		}
 		return
@@ -86,7 +90,7 @@ func main() {
 	// An unknown name is refused rather than guessed at: a runner asking for a
 	// gate this project does not have must learn that, not receive an empty
 	// measurement that reads like a clean result.
-	name, envelope, err := common.ParseGateArgs(args)
+	name, envelope, err := common.ParseGateArgs(repoRoot, args)
 	if err != nil {
 		fail("%v; run `%s -h` for usage", err, os.Args[0])
 	}

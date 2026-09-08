@@ -371,7 +371,7 @@ func TestParseRunArgs(t *testing.T) {
 		{args: []string{"tested", "--envelope"}, wantErr: true},
 		{args: []string{"lint"}, wantErr: true},
 	} {
-		name, verdict, err := ParseRunArgs(c.args)
+		name, verdict, err := ParseRunArgs(t.TempDir(), c.args)
 		if c.wantErr {
 			if err == nil {
 				t.Errorf("ParseRunArgs(%q) = (%q, %t, nil), want an error", c.args, name, verdict)
@@ -430,8 +430,8 @@ func TestJudge_NamesEveryMetricOverItsCapNotJustTheFirst(t *testing.T) {
 // parser has already accepted the name, so it never answers a person.
 func TestUnknownGateIsRefusedTheSameWayByEveryEntryPoint(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
-	_, _, gateArgsErr := ParseGateArgs([]string{"lint"})
-	_, _, runArgsErr := ParseRunArgs([]string{"lint"})
+	_, _, gateArgsErr := ParseGateArgs(t.TempDir(), []string{"lint"})
+	_, _, runArgsErr := ParseRunArgs(t.TempDir(), []string{"lint"})
 	var out bytes.Buffer
 	judgeErr := JudgeStdin(dir, "lint", bytes.NewReader([]byte(`{"gate":"lint","metrics":[]}`)), &out)
 	measureErr := RunOneGate("", "", "lint")
