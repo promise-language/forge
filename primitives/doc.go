@@ -6,14 +6,14 @@
 // What lives here (planned):
 //
 //   - hash.go      FNV-128a hash over a directory tree (used for the
-//                  staleness check that compares baked-in vs. current
-//                  tools/build source).
+//     staleness check that compares baked-in vs. current
+//     tools/build source).
 //   - stale.go     CheckStale(repoRoot, compiledHash) — refuses to run if
-//                  either input is empty, or if the baked-in repoRoot is
-//                  unreachable, or if the source hash has drifted.
+//     either input is empty, or if the baked-in repoRoot is
+//     unreachable, or if the source hash has drifted.
 //   - platform.go  IsWindows(), ExeSuffix(), BinaryName(), Which().
 //   - exec.go      RunIn, RunOutputIn, RunSilent — subprocess helpers
-//                  with attached or captured streams.
+//     with attached or captured streams.
 //   - args.go      NormalizeArgs — accept both -foo and --foo.
 //   - interrupt.go Interrupted() and the SIGINT handler that backs it.
 //   - lock.go      File-locked critical section (wraps gofrs/flock).

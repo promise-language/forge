@@ -15,7 +15,7 @@
 //   - .claude/settings.json               wires bin/guard as a PreToolUse hook
 //   - .gitignore                          adds bin/ (built tools are never committed)
 //   - CLAUDE.md                           appends a "Dev tooling" section so agents
-//                                         discover the ./make → bin/verify workflow
+//     discover the ./make → bin/verify workflow
 //
 // After init exits, the target repo owns every file. Forge is not a runtime
 // dependency unless the project explicitly imports primitives/.

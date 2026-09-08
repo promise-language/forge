@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Git pre-commit trampoline — execs the commit gate, or refuses the commit.
+# Wired up by 'git config core.hooksPath .githooks', which ./make runs for you.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -x "$root/bin/precommit-guard" ]; then
+    exec "$root/bin/precommit-guard"
+fi
+# Fail closed: the commit gate is mandatory. If bin/precommit-guard is missing, a
+# commit could slip past every check — so block it and demand provisioning.
+#
+# precommit-guard is a WORKSPACE tool, not one forge builds: ./make cannot supply
+# it, so the recovery is `workspace setup` rather than a local bootstrap. forge
+# deliberately builds no twin of it (docs/tool-contract.md §5 — one name, one
+# builder), which is why this hook names it directly.
+echo "pre-commit: bin/precommit-guard not installed — run 'workspace setup' on this checkout, then commit" >&2
+exit 1
