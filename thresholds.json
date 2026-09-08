@@ -26,5 +26,9 @@
   "build_cache_free_bytes": {
     "direction": "at_least",
     "cap": 1073741824
+  },
+  "statement_coverage": {
+    "direction": "at_least",
+    "cap": 75
   }
 }
