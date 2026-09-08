@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/promise-language/forge/primitives"
 )
 
 type step struct {
@@ -86,7 +88,7 @@ func verifyPipeline(repoRoot string) []step {
 }
 
 func verifySteps(repoRoot string) []step {
-	if Exists(filepath.Join(repoRoot, "go.mod")) {
+	if primitives.Exists(filepath.Join(repoRoot, "go.mod")) {
 		return []step{
 			{"format", checkFormatted},
 			{"vet", func(r string) error { return runAllModules(r, "vet") }},
@@ -106,7 +108,7 @@ func verifySteps(repoRoot string) []step {
 // runAllModules runs `go <verb> ./...` in every module of the repository.
 func runAllModules(repoRoot, verb string) error {
 	for _, dir := range modules(repoRoot) {
-		if err := RunIn(dir, "go", verb, "./..."); err != nil {
+		if err := primitives.RunIn(dir, "go", verb, "./..."); err != nil {
 			return err
 		}
 	}
@@ -126,7 +128,7 @@ func runAllModules(repoRoot, verb string) error {
 // signal and the exit code carries nothing. The names are printed because
 // "run gofmt" without them leaves the reader to find the files themselves.
 func checkFormatted(repoRoot string) error {
-	out, err := RunOutputIn(repoRoot, "gofmt", "-l", ".")
+	out, err := primitives.RunOutputIn(repoRoot, "gofmt", "-l", ".")
 	if err != nil {
 		return fmt.Errorf("gofmt -l: %w", err)
 	}

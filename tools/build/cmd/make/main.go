@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/promise-language/forge/primitives"
 	"github.com/promise-language/forge/tools/build/common"
 )
 
@@ -28,7 +29,7 @@ tools-source hash and repo root) and wires git hooks. Skips the build when
 bin/ is already up to date; -force rebuilds regardless.`
 
 func main() {
-	common.MaybeHelp(os.Args[1:], usage)
+	primitives.MaybeHelp(os.Args[1:], usage)
 	force := false
 	for _, a := range os.Args[1:] {
 		if a == "-force" || a == "--force" {
@@ -46,11 +47,11 @@ func main() {
 	}
 
 	// 2. Hash the tools source — baked into every binary below.
-	hash, err := common.ToolsSourceHash(repoRoot)
+	hash, err := common.SourceHash(repoRoot)
 	must(err)
 
 	// 3. Enable git hooks unconditionally (idempotent, fast).
-	if err := common.RunSetup(repoRoot); err != nil {
+	if err := primitives.RunSetup(repoRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not configure git hooks: %v\n", err)
 	}
 
@@ -72,9 +73,9 @@ func main() {
 	ldflags := fmt.Sprintf("-s -w -X main.sourceHash=%s -X main.repoRoot=%s", hash, repoRoot)
 	toolsModDir := filepath.Join(repoRoot, "tools", "build")
 	for _, name := range tools {
-		out := filepath.Join(binDir, common.BinaryName(name))
+		out := filepath.Join(binDir, primitives.BinaryName(name))
 		fmt.Printf("building %s\n", name)
-		if err := common.RunIn(toolsModDir, "go", "build",
+		if err := primitives.RunIn(toolsModDir, "go", "build",
 			"-trimpath",
 			"-ldflags", ldflags,
 			"-o", out,
@@ -90,7 +91,7 @@ func main() {
 	sb.WriteString(hash)
 	sb.WriteByte('\n')
 	for _, name := range tools {
-		h, err := fileHash(filepath.Join(binDir, common.BinaryName(name)))
+		h, err := fileHash(filepath.Join(binDir, primitives.BinaryName(name)))
 		if err != nil {
 			fail("hashing %s: %v", name, err)
 		}
@@ -159,7 +160,7 @@ func upToDate(hashFile, hash, binDir string, tools []string) bool {
 		if !ok {
 			return false // tool not recorded in sidecar
 		}
-		got, err := fileHash(filepath.Join(binDir, common.BinaryName(name)))
+		got, err := fileHash(filepath.Join(binDir, primitives.BinaryName(name)))
 		if err != nil {
 			return false // binary missing or unreadable
 		}

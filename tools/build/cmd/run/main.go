@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/promise-language/forge/primitives"
 	"github.com/promise-language/forge/tools/build/common"
 )
 
@@ -51,8 +52,8 @@ func usage() string {
 }
 
 func main() {
-	args := common.NormalizeArgs(os.Args[1:])
-	if common.HasHelpFlag(args) {
+	args := primitives.NormalizeArgs(os.Args[1:])
+	if primitives.HasHelpFlag(args) {
 		fmt.Print(usage())
 		os.Exit(0)
 	}
