@@ -1,3 +1,3 @@
 module github.com/promise-language/forge
 
-go 1.25
+go 1.26

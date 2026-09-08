@@ -289,9 +289,14 @@ exit 1
 
 // ───────────────────────── tools module ─────────────────────────
 
+// The tools module declares one Go version, the same in every project that
+// adopts this layout. It is not derived from the target and not a floor the
+// target may raise: a version that varies per project is a variation in the
+// tools themselves, and the tools exist to not vary. Raising it is an edit
+// here, which every project then gets by adopting it.
 const goMod = `module __MODULE__
 
-go 1.22
+go 1.26
 `
 
 const platformGo = `package common
@@ -602,7 +607,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 )
 
