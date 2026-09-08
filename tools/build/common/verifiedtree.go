@@ -1,18 +1,20 @@
 package common
 
-// This file is the writing end of the verified-tree contract: bin/verify
-// records the tree it blessed at .workspace/verified-tree, and the workspace's
-// precommit-guard refuses a commit whose staged tree differs. The reading end
-// lives in the workspace repository (docs/tool-contract.md §8) — a tool forge
-// deliberately builds no twin of — so the record's path is spelled at both
-// ends. That is the contract, not duplicated logic: the two ends compute
-// different things and only have to agree on the id.
+// This file is the writing end of the verified-tree contract
+// (workspace docs/tool-contract.md §8): bin/verify records the tree it blessed
+// at .workspace/verified-tree, and the workspace-delivered precommit-guard
+// refuses a commit whose staged tree differs.
 //
-// Spelling the path twice across two repositories is the one drift this file
-// cannot test for. Upstream pins its guard's spelling to this constant from a
-// test; forge cannot read the guard's source, so drift here would surface as a
-// permanent guard refusal whose named recovery — re-running verify — never
-// clears it.
+// The reading end is not in this repository — the guard is a workspace tool,
+// built and owned there (§1), and this repo cannot import it. What the two
+// ends share is the record's location and format, not code: one git tree
+// object id, newline terminated, at the path below. Spelling it wrong here is
+// a permanent, silent refusal — verify writes one path, the guard reads
+// another and always finds it absent — so it is a constant, named once.
+//
+// Without this end, every commit in this checkout is refused: nothing ever
+// blesses a tree, and the guard's named recovery ("run bin/verify") cannot
+// clear a check that verify does not participate in.
 
 import (
 	"bytes"
@@ -23,9 +25,8 @@ import (
 	"strings"
 )
 
-// verifiedTreeRecord is where verify records the tree it blessed: one git
-// tree object id, newline terminated, in the gitignored per-checkout
-// .workspace/ directory.
+// verifiedTreeRecord is where verify records the tree it blessed, in the
+// gitignored per-checkout .workspace/ directory.
 const verifiedTreeRecord = ".workspace/verified-tree"
 
 // clearVerifiedTree removes the record. Verify calls it before its first step
@@ -40,8 +41,8 @@ func clearVerifiedTree(repoRoot string) error {
 }
 
 // recordVerifiedTree writes the tree id of the content verify just blessed.
-// It runs only after every other step has passed, so the id is of the
-// post-repair tree (verify repairs — gofmt -w — before it measures).
+// It runs only after every other step has passed, so a red run blesses
+// nothing.
 //
 // The tree is computed over a temporary index so the real index is untouched,
 // and it is exactly what `git add -A` would stage: seeded from a copy of the
@@ -118,9 +119,9 @@ func recordVerifiedTree(repoRoot string) error {
 }
 
 // gitWithIndex runs git in dir, with GIT_INDEX_FILE pointed at indexFile when
-// one is given, and returns trimmed stdout. The helpers in exec.go carry no
-// environment, which is the one thing this needs. Stderr is captured into the
-// error so it never leaks to the terminal.
+// one is given, and returns trimmed stdout. RunOutputIn cannot be used: it
+// carries no environment, which is the one thing this needs. Stderr is
+// captured into the error so it never leaks to the terminal.
 func gitWithIndex(dir, indexFile string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir

@@ -2,21 +2,45 @@ package common
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // The contract, tested from the recording end: the id verify records must
-// equal the id the workspace guard computes over the real index after
-// `git add -A`, because that agreement is the whole of what the two ends
-// share. Ported from the workspace repo, where the reading end lives.
+// equal the id the guard computes over the real index after `git add -A`,
+// because that agreement is the whole of what the two ends share. The guard
+// is a workspace tool and is not in this repository, so the comparison is
+// spelled out here as `git write-tree` — exactly what the guard runs.
 
-// verifyRepoForTest is gitRepoForTest plus an identity and the .gitignore
-// every project is required to carry for .workspace/.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// verifyRepoForTest is a fresh checkout with an identity and the .gitignore
+// every project is required to carry for .workspace/ (tool-contract §3).
 func verifyRepoForTest(t *testing.T) string {
 	t.Helper()
-	dir := gitRepoForTest(t)
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main")
 	git(t, dir, "config", "user.email", "t@example.com")
 	git(t, dir, "config", "user.name", "T")
 	writeFile(t, filepath.Join(dir, ".gitignore"), ".workspace/\n")
@@ -25,7 +49,11 @@ func verifyRepoForTest(t *testing.T) string {
 
 func recordedTree(t *testing.T, dir string) string {
 	t.Helper()
-	return strings.TrimSpace(readFile(t, filepath.Join(dir, ".workspace", "verified-tree")))
+	data, err := os.ReadFile(filepath.Join(dir, ".workspace", "verified-tree"))
+	if err != nil {
+		t.Fatalf("read the record: %v", err)
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func TestRecordMatchesRealStage(t *testing.T) {
@@ -40,10 +68,7 @@ func TestRecordMatchesRealStage(t *testing.T) {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	git(t, dir, "add", "-A")
-	staged, err := RunOutputIn(dir, "git", "write-tree")
-	if err != nil {
-		t.Fatalf("git write-tree: %v", err)
-	}
+	staged := git(t, dir, "write-tree")
 	if got := recordedTree(t, dir); got != staged {
 		t.Errorf("recorded %s, but git add -A stages %s — the two ends disagree", got, staged)
 	}
@@ -51,7 +76,7 @@ func TestRecordMatchesRealStage(t *testing.T) {
 
 func TestRecordIncludesUntracked(t *testing.T) {
 	// A step whose whole output is new files must produce a committable match,
-	// which is why `git stash create` (tracked modifications only) was rejected.
+	// which is why `git stash create` (tracked modifications only) is not it.
 	dir := verifyRepoForTest(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
 	git(t, dir, "add", "-A")
@@ -61,10 +86,7 @@ func TestRecordIncludesUntracked(t *testing.T) {
 	if err := recordVerifiedTree(dir); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
-	names, err := RunOutputIn(dir, "git", "ls-tree", "-r", "--name-only", recordedTree(t, dir))
-	if err != nil {
-		t.Fatalf("git ls-tree: %v", err)
-	}
+	names := git(t, dir, "ls-tree", "-r", "--name-only", recordedTree(t, dir))
 	if !strings.Contains(names, "new.txt") {
 		t.Errorf("untracked non-ignored file missing from recorded tree: %q", names)
 	}
@@ -84,10 +106,7 @@ func TestRecordRespectsIgnoreRules(t *testing.T) {
 	if err := recordVerifiedTree(dir); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
-	names, err := RunOutputIn(dir, "git", "ls-tree", "-r", "--name-only", recordedTree(t, dir))
-	if err != nil {
-		t.Fatalf("git ls-tree: %v", err)
-	}
+	names := git(t, dir, "ls-tree", "-r", "--name-only", recordedTree(t, dir))
 	if strings.Contains(names, "ignored.txt") {
 		t.Errorf("ignored file should not be in the recorded tree: %q", names)
 	}
@@ -117,17 +136,11 @@ func TestRecordTrackedSetFollowsIndexNotHEAD(t *testing.T) {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	git(t, dir, "add", "-A")
-	staged, err := RunOutputIn(dir, "git", "write-tree")
-	if err != nil {
-		t.Fatalf("git write-tree: %v", err)
-	}
+	staged := git(t, dir, "write-tree")
 	if got := recordedTree(t, dir); got != staged {
 		t.Errorf("recorded %s, but git add -A stages %s — the two ends disagree", got, staged)
 	}
-	names, err := RunOutputIn(dir, "git", "ls-tree", "-r", "--name-only", recordedTree(t, dir))
-	if err != nil {
-		t.Fatalf("git ls-tree: %v", err)
-	}
+	names := git(t, dir, "ls-tree", "-r", "--name-only", recordedTree(t, dir))
 	if !strings.Contains(names, "added.txt") {
 		t.Errorf("force-added file missing from recorded tree: %q", names)
 	}
@@ -145,19 +158,44 @@ func TestRecordLeavesIndexAlone(t *testing.T) {
 	git(t, dir, "add", "staged.txt")
 	writeFile(t, filepath.Join(dir, "unstaged.txt"), "unstaged\n")
 
-	before, err := RunOutputIn(dir, "git", "diff", "--cached", "--name-only")
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := git(t, dir, "diff", "--cached", "--name-only")
 	if err := recordVerifiedTree(dir); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
-	after, err := RunOutputIn(dir, "git", "diff", "--cached", "--name-only")
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := git(t, dir, "diff", "--cached", "--name-only")
 	if before != after {
 		t.Errorf("recording disturbed the real index: before %q, after %q", before, after)
+	}
+}
+
+// THE FORMAT IS HALF THE CONTRACT. The guard is a workspace tool that cannot be
+// imported here, so nothing but agreement on the bytes connects the two ends:
+// one tree id, newline terminated, and nothing else in the file. Every other
+// test in this file reads the record through a trim, so a record written
+// without its newline — or with a second line of commentary — passes all of
+// them and is refused by a reader this repository cannot run.
+func TestRecordIsOneTreeIdNewlineTerminated(t *testing.T) {
+	dir := verifyRepoForTest(t)
+	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
+
+	if err := recordVerifiedTree(dir); err != nil {
+		t.Fatalf("recordVerifiedTree: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(verifiedTreeRecord)))
+	if err != nil {
+		t.Fatalf("read the record: %v", err)
+	}
+	body := string(raw)
+	if !strings.HasSuffix(body, "\n") {
+		t.Errorf("record = %q, want it newline terminated", body)
+	}
+	id := strings.TrimSuffix(body, "\n")
+	if strings.ContainsAny(id, "\n ") || id == "" {
+		t.Errorf("record = %q, want exactly one bare tree id and nothing else", body)
+	}
+	// And it must name a tree git can resolve, not merely look like an id.
+	if got := git(t, dir, "cat-file", "-t", id); got != "tree" {
+		t.Errorf("recorded id is a %q, want a tree", got)
 	}
 }
 
@@ -238,9 +276,10 @@ func TestRunVerifyRedRunLeavesNothingBlessed(t *testing.T) {
 	// a green run overwrites the record at the end anyway, so dropping the
 	// clear call is invisible to TestRunVerifyStubClearsAndRecords. A stale
 	// blessing surviving a failed verify is the one outcome the check must
-	// never produce: an unparseable Go file reddens the format step, and the
-	// pre-seeded record has to be gone.
-	dir := t.TempDir()
+	// never produce: a Go-shaped tree with nothing in it cannot pass the
+	// agent-turn ratchet, and an unparseable file cannot pass format, so the
+	// run goes red before record — and the pre-seeded blessing has to be gone.
+	dir := verifyRepoForTest(t)
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.test\n")
 	writeFile(t, filepath.Join(dir, "broken.go"), "package broken\nfunc {\n")
 	writeFile(t, filepath.Join(dir, ".workspace", "verified-tree"), "stale-blessing\n")
@@ -252,11 +291,31 @@ func TestRunVerifyRedRunLeavesNothingBlessed(t *testing.T) {
 	}
 }
 
-// Upstream carries a TestRecordPathAgreesWithGuard here, pinning the guard's
-// spelling of the record path to this module's constant by reading
-// precommitguard/verifiedtree.go. forge does not build the guard and does not
-// carry its source, so that test cannot be ported; the drift it guards against
-// is called out on verifiedTreeRecord itself.
+// A CLEAR THAT FAILS FAILS THE RUN. The clear exists so a run that dies part
+// way leaves nothing blessed; if it can fail and be ignored, the case it was
+// added for is exactly the case it does not cover — the record it could not
+// remove survives the whole run, and a red verify hands the guard a stale
+// blessing for a tree nobody checked. Nothing may run past it.
+func TestRunVerifyFailsWhenTheStaleRecordCannotBeCleared(t *testing.T) {
+	dir := verifyRepoForTest(t)
+	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
+	// A non-empty directory where the record belongs: os.Remove refuses it, the
+	// one clear failure that is neither "absent" nor a permission quirk of the
+	// machine the tests run on.
+	writeFile(t, filepath.Join(dir, filepath.FromSlash(verifiedTreeRecord), "occupied"), "x\n")
+
+	err := RunVerify(dir, nil)
+	if err == nil {
+		t.Fatal("RunVerify passed although the stale record could not be cleared")
+	}
+	if !strings.Contains(err.Error(), verifiedTreeRecord) {
+		t.Errorf("err = %v, want it to name %s", err, verifiedTreeRecord)
+	}
+	// And it stopped there rather than running the pipeline over it.
+	if !Exists(filepath.Join(dir, filepath.FromSlash(verifiedTreeRecord), "occupied")) {
+		t.Error("the run went on and disturbed what it could not clear")
+	}
+}
 
 func stepNames(steps []step) []string {
 	var names []string

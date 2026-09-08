@@ -1,14 +1,9 @@
-// Command gate runs one named gate against this repository.
+// Command gate measures one property of this tree and prints what it found.
 //
-// `bin/gate <name>` is the fixed entry point a flow uses to ask for a
-// measurement. Fixed, and deliberately not configurable: the protocol addresses
-// gates by name, so a project spelling its entry point differently would have
-// gates nothing could ask for.
-//
-// A gate measures and modifies nothing — including afterwards. That is what
-// separates it from `bin/verify`, which is a command: verify repairs what has
-// one right answer on its way to an answer, which is what a producing step
-// wants and exactly why a landing decision may not rest on it.
+// It is not meant to be run by hand — `bin/run <gate>` is that path. A gate
+// answers a runner, and a runner is the only caller that can say what became
+// of the run: a gate killed for memory is not alive to report it, and a gate
+// that exited cleanly having printed nothing would be believed.
 package main
 
 import (
@@ -26,80 +21,100 @@ var (
 	sourceHash = ""
 )
 
-func main() {
-	common.CheckStale(repoRoot, sourceHash)
-
-	// --envelope is protocol, not configuration: a runner asks for machine-
-	// readable measurements with it, and every other invocation is a person at
-	// a terminal. It is stripped here so the name reaches the same place it
-	// would have without it.
-	var (
-		args     []string
-		envelope bool
-	)
-	for _, a := range common.NormalizeArgs(os.Args[1:]) {
-		if a == "-envelope" {
-			envelope = true
-			continue
-		}
-		args = append(args, a)
+func usage() string {
+	var sb strings.Builder
+	sb.WriteString("gate — measure one property of this tree.\n\n")
+	sb.WriteString("Usage:\n  gate <name> --envelope\n  gate --list\n\n")
+	sb.WriteString("Prints one JSON envelope on stdout and nothing else. Without --envelope it\n")
+	sb.WriteString("prints nothing and fails: a bare run that printed measurements and exited 0\n")
+	sb.WriteString("would be read as a pass by the first script that wrapped it, and a gate has\n")
+	sb.WriteString("no verdict to give. Run `run <name>` for a result meant for a person.\n\n")
+	sb.WriteString("Gates:\n")
+	for _, n := range common.GateNames() {
+		fmt.Fprintf(&sb, "  %-12s %s\n", n, common.GateSummary(n))
 	}
-	// -list is protocol too: the flow SDK discovers what this project's gates
-	// are by asking the entry point (one name per line on stdout), because the
-	// entry point is the only party whose answer cannot drift from what a run
-	// would find. It is answered before the single-name rule below: the query
-	// takes no gate name, and refusing it reads as a machine with no gates.
-	if len(args) == 1 && args[0] == "-list" {
-		fmt.Println(strings.Join(common.GateNames(), "\n"))
-		return
-	}
-	if len(args) != 1 || args[0] == "-h" || args[0] == "-help" {
-		usage()
-		// No argument is a usage error, not a passing gate: exiting 0 here would
-		// let a caller that forgot the name read silence as success.
-		os.Exit(2)
-	}
-
-	// A bare invocation is refused, and does not measure. Any call without the
-	// flag is a person or an agent at a terminal, and this program is not a
-	// channel for them: gates-and-commands.md requires it to print nothing on
-	// stdout and exit non-zero, WHATEVER the gate would have found.
-	//
-	// Exiting 0 on a passing gate is the precise ambiguity the three parties
-	// exist to remove — the first script to wrap `bin/gate tested` reads that 0
-	// as a pass, and a gate has no verdict to give. Refusing before measuring
-	// rather than measuring and then failing keeps the two readings from ever
-	// coexisting, and costs a person nothing: `bin/run <name>` is their path,
-	// and it is the one that judges.
-	if !envelope {
-		fmt.Fprintf(os.Stderr, "gate: refusing to measure %q without --envelope; "+
-			"run `bin/run %s` for a result meant for a person\n", args[0], args[0])
-		os.Exit(1)
-	}
-
-	// Envelope mode. common.MeasureGate builds the document and keeps the gate's
-	// own progress off stdout, so what follows carries the envelope and nothing
-	// else. It is shared with `bin/run <gate>`, which judges the same envelope
-	// without a runner in between.
-	env, gerr := common.MeasureGate(repoRoot, args[0])
-	if err := json.NewEncoder(os.Stdout).Encode(env); err != nil {
-		// The envelope is the whole point of this mode: a run that cannot state
-		// what it measured has not measured anything a caller may act on.
-		fmt.Fprintln(os.Stderr, "gate: could not write the envelope:", err)
-		os.Exit(2)
-	}
-	// A gate that measured a failure and said so exits non-zero and HAS
-	// measured — the runner records this code and decides nothing with it.
-	if gerr != nil {
-		os.Exit(1)
-	}
+	return sb.String()
 }
 
-func usage() {
-	fmt.Fprintf(os.Stderr, "usage: bin/gate <name>\n\nGates this project answers:\n  %s\n\n",
-		strings.Join(common.GateNames(), "\n  "))
-	fmt.Fprint(os.Stderr, "A name is a concept, optionally with an instance: `tested:tools`.\n"+
-		"Omitting the instance measures every module.\n\n"+
-		"`integration` is the composition a landing decision rests on.\n"+
-		"For the repairing counterpart, see bin/verify — it is a command, not a gate.\n")
+// isListArg reports whether the argv asks for the gate list and nothing else.
+// Exactly one argument: a request with anything alongside it is ambiguous
+// between listing and measuring, and guessing would print a list to a caller
+// waiting for an envelope.
+func isListArg(args []string) bool {
+	return len(args) == 1 && (args[0] == "--list" || args[0] == "-list" || args[0] == "list")
+}
+
+// fail prints to stderr and exits non-zero, leaving stdout untouched. Every
+// path out of this program that is not a complete envelope comes through here.
+func fail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "gate: "+format+"\n", args...)
+	os.Exit(1)
+}
+
+func main() {
+	args := common.NormalizeArgs(os.Args[1:])
+
+	// --list answers "which gates does this project have?", one name per line
+	// on stdout, exit 0.
+	//
+	// It is the only mode besides a measurement that writes to stdout, and it
+	// does not break the envelope rule: a caller that asked for the list did
+	// not ask for a measurement, and a name-per-line stream cannot be mistaken
+	// for an envelope by anything that parses one.
+	//
+	// It exists because an orchestrator must not hold a second copy of what
+	// this project can measure. Asking the entry point is the only way to
+	// learn it that cannot go stale — and an entry point that is absent or
+	// cannot answer reports a project with no gates, which is the truth about
+	// this machine and exactly what `doctor` needs to say.
+	if isListArg(args) {
+		for _, n := range common.GateNames() {
+			fmt.Println(n)
+		}
+		return
+	}
+
+	// Help goes to STDERR and exits non-zero, where every other tool here
+	// prints it to stdout and exits 0. Stdout carries the envelope and nothing
+	// else — a caller redirecting stdout to a parser must get an envelope or
+	// nothing, and "nothing" must not look like success.
+	if common.HasHelpFlag(args) {
+		fmt.Fprint(os.Stderr, usage())
+		os.Exit(1)
+	}
+
+	// An unknown name is refused rather than guessed at: a runner asking for a
+	// gate this project does not have must learn that, not receive an empty
+	// measurement that reads like a clean result.
+	name, envelope, err := common.ParseGateArgs(args)
+	if err != nil {
+		fail("%v; run `%s -h` for usage", err, os.Args[0])
+	}
+	if !envelope {
+		fail("refusing to measure without --envelope; run `run %s` for a result "+
+			"meant for a person", name)
+	}
+
+	// Stale logic would measure this tree with yesterday's gates and print a
+	// well-formed envelope about it, which is the one failure nothing
+	// downstream could detect.
+	if reason := common.StaleReason(repoRoot, sourceHash); reason != "" {
+		fail("%s — run %s", reason, common.MakeCmd())
+	}
+
+	env, err := common.MeasureGate(repoRoot, name)
+	if err != nil {
+		// Nothing was measured. No envelope, because a partial one is not a
+		// measurement and must not parse as one.
+		fail("%v", err)
+	}
+
+	// The envelope is written whole, in one write. A run killed part-way
+	// leaves output that does not parse, which is how a reader tells "measured
+	// nothing" from "measured and reported" without asking the gate.
+	out, err := json.Marshal(env)
+	if err != nil {
+		fail("could not encode the envelope: %v", err)
+	}
+	os.Stdout.Write(append(out, '\n'))
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -12,9 +13,15 @@ type step struct {
 	run  func(repoRoot string) error
 }
 
-// RunVerify is the commit gate: format → vet → build → test. It always prints a
-// summary block (even on failure) so an agent tailing the output sees the
-// result without re-running, and the process exit code is the only contract.
+// RunVerify is the commit gate: format → vet → build → test → record. It
+// always prints a summary block (even on failure) so an agent tailing the
+// output sees the result without re-running, and the process exit code is the
+// only contract.
+//
+// The trailing record step is the writing end of the verified-tree contract
+// (verifiedtree.go): the exit status says the tree is sound, and the record
+// says which tree that was, so the precommit-guard can refuse a commit of any
+// other one.
 //
 // This is an EXAMPLE pipeline. For a Go project it runs real go tooling; for
 // anything else it runs harmless stubs. Replace verifySteps with your project's
@@ -81,8 +88,10 @@ func verifyPipeline(repoRoot string) []step {
 func verifySteps(repoRoot string) []step {
 	if Exists(filepath.Join(repoRoot, "go.mod")) {
 		return []step{
-			{"format", func(r string) error { return RunIn(r, "gofmt", "-w", ".") }},
-			{"measure", func(r string) error { return RunMeasurement(r) }},
+			{"format", checkFormatted},
+			{"vet", func(r string) error { return runAllModules(r, "vet") }},
+			{"build", func(r string) error { return runAllModules(r, "build") }},
+			{"test", func(r string) error { return runAllModules(r, "test") }},
 		}
 	}
 	stub := func(label string) step {
@@ -92,4 +101,41 @@ func verifySteps(repoRoot string) []step {
 		}}
 	}
 	return []step{stub("format"), stub("vet"), stub("build"), stub("test")}
+}
+
+// runAllModules runs `go <verb> ./...` in every module of the repository.
+func runAllModules(repoRoot, verb string) error {
+	for _, dir := range modules(repoRoot) {
+		if err := RunIn(dir, "go", verb, "./..."); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkFormatted reports unformatted files instead of rewriting them.
+//
+// `gofmt -w` made this step incapable of failing: it repaired the tree and
+// exited 0, so the gate reported a clean run over a change it had silently
+// altered. A gate states what is true about the tree it was handed; one that
+// edits first is answering about a different tree — and under CI, about one
+// nobody will ever see, since the checkout is discarded. Unformatted code would
+// merge with the gate green.
+//
+// `gofmt -l` exits 0 whether or not it lists anything, so the OUTPUT is the
+// signal and the exit code carries nothing. The names are printed because
+// "run gofmt" without them leaves the reader to find the files themselves.
+func checkFormatted(repoRoot string) error {
+	out, err := RunOutputIn(repoRoot, "gofmt", "-l", ".")
+	if err != nil {
+		return fmt.Errorf("gofmt -l: %w", err)
+	}
+	if out == "" {
+		return nil
+	}
+	files := strings.Split(out, "\n")
+	for _, f := range files {
+		fmt.Printf("    unformatted: %s\n", f)
+	}
+	return fmt.Errorf("%d file(s) need gofmt -w", len(files))
 }

@@ -1,268 +1,638 @@
 package common
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
-// The defining property: a gate MEASURES and does not modify what it measures.
-//
-// `formatted` is the one where getting this wrong is easiest and least visible,
-// because the mutating form of the same tool is one flag away — verify runs
-// `gofmt -w`, this must run `gofmt -l`. A gate that formatted the tree on its
-// way to reporting it formatted would pass always, and its answer would
-// describe a tree that did not exist when it started.
-func TestGateFormattedDetectsWithoutModifying(t *testing.T) {
-	root := goModuleForTest(t)
-	bad := "package p\n\nfunc  Badly( ) {\n}\n"
-	path := filepath.Join(root, "bad.go")
-	writeFile(t, path, bad)
-
-	err := RunGate(root, "formatted")
-	if err == nil {
-		t.Fatal("formatted passed on an unformatted tree")
+// The gate set is closed. A name absent from it is refused rather than treated
+// as a gate that measured nothing — the two are opposite results, and the
+// second reads like a clean tree.
+func TestUnknownGateIsRefusedRatherThanEmpty(t *testing.T) {
+	if _, err := MeasureGate(t.TempDir(), "lint"); err == nil {
+		t.Fatal("MeasureGate accepted a gate this project does not provide")
 	}
-	if !strings.Contains(err.Error(), "bad.go") {
-		t.Errorf("failure does not name the offending file: %v", err)
-	}
-	if got := readFile(t, path); got != bad {
-		t.Errorf("the gate MODIFIED the file it was measuring:\n%s", got)
+	if _, _, err := ParseGateArgs([]string{"lint", "--envelope"}); err == nil {
+		t.Fatal("ParseGateArgs accepted an unknown gate name")
 	}
 }
 
-func TestGateFormattedPassesOnAFormattedTree(t *testing.T) {
-	root := goModuleForTest(t)
-	writeFile(t, filepath.Join(root, "ok.go"), "package p\n")
-	if err := RunGate(root, "formatted"); err != nil {
-		t.Errorf("formatted failed on a formatted tree: %v", err)
+// Every part of a composition must be individually runnable. That is a
+// requirement rather than an implementation detail: a step fixing one failing
+// suite re-runs that suite, and a composition whose parts cannot be named
+// makes every fix round pay for the whole set.
+func TestCompositionPartsAreThemselvesGates(t *testing.T) {
+	def, ok := gates["integration"]
+	if !ok {
+		t.Fatal("no integration gate")
 	}
-}
-
-// gofmt exits 0 whether or not it found anything, so a runner checking only the
-// exit status would pass every time. The OUTPUT is the verdict.
-func TestGateFormattedDoesNotTrustExitStatus(t *testing.T) {
-	root := goModuleForTest(t)
-	writeFile(t, filepath.Join(root, "bad.go"), "package p\n\nfunc  X( ) {\n}\n")
-	if err := RunGate(root, "formatted"); err == nil {
-		t.Error("formatted read gofmt's exit status instead of its output")
+	if len(def.parts) == 0 {
+		t.Fatal("integration composes nothing")
 	}
-}
-
-// An undeclared concept must be refused rather than run. Addressing gates by
-// name is what keeps this from being an arbitrary command executor, and that
-// only holds if unknown names stop here.
-func TestRunGateRefusesUnknownConcepts(t *testing.T) {
-	err := RunGate(t.TempDir(), "definitely-not-a-gate")
-	if err == nil {
-		t.Fatal("unknown concept accepted")
-	}
-	if !strings.Contains(err.Error(), "this project provides") {
-		t.Errorf("error does not say what could have been asked for: %v", err)
-	}
-}
-
-// Instances that narrow nothing must be refused rather than silently ignored.
-// `formatted:root` would advertise a narrowing that does not exist, since gofmt
-// walks directories and every module is under the root.
-func TestRunGateRefusesInstancesOnWholeTreeGates(t *testing.T) {
-	for _, name := range []string{"formatted:root", "integration:root"} {
-		if err := RunGate(t.TempDir(), name); err == nil {
-			t.Errorf("%s accepted; it narrows nothing", name)
+	for _, part := range def.parts {
+		if !KnownGate(part) {
+			t.Errorf("integration composes %q, which is not a gate anyone can ask for", part)
 		}
 	}
 }
 
-func TestRunGateRefusesUnknownInstances(t *testing.T) {
-	err := RunGate(t.TempDir(), "tested:nosuchmodule")
-	if err == nil {
-		t.Fatal("unknown instance accepted")
+// A gate is asked for one way. Two callers asking the same thing must not be
+// able to get different answers and both be right, so anything that is not
+// "one name, optionally --envelope" is refused rather than interpreted.
+func TestGateInvocationIsOneWay(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     []string
+		wantName string
+		wantEnv  bool
+		wantErr  bool
+	}{
+		{"bare name asks for no envelope", []string{"tested"}, "tested", false, false},
+		{"runner appends the flag", []string{"tested", "--envelope"}, "tested", true, false},
+		{"short spelling is the same flag", []string{"tested", "-envelope"}, "tested", true, false},
+		{"no name at all", []string{"--envelope"}, "", false, true},
+		{"two names", []string{"tested", "builds", "--envelope"}, "", false, true},
+		{"an unknown flag is refused, not ignored", []string{"tested", "--quiet"}, "", false, true},
+		// fit is reached the same way every gate is: nothing about a gate whose
+		// subject is the machine changes how it is asked for, and a bare
+		// `bin/gate fit` is refused an envelope by this same rule.
+		{"the machine gate is asked for like any other", []string{"fit", "--envelope"}, "fit", true, false},
 	}
-	if !strings.Contains(err.Error(), "this project has") {
-		t.Errorf("error does not list the real instances: %v", err)
-	}
-}
-
-// gateNamesExpectation is the drift guard for the gaterun.go mirror.
-//
-// The identical literal appears in workspacetool/gaterun_test.go and is
-// asserted against that package's copy of this runner. Admission consults the
-// copy to decide whether a tracker-declared gate is one this project answers,
-// so the two answering differently means a gate the tracker asked for is
-// silently skipped there while `bin/gate` would have run it — a disagreement
-// that produces no error anywhere, only a check that did not happen.
-//
-// Spelled out rather than derived from `modules` and `providedConcepts`: a test
-// that recomputes the answer agrees with any change by construction, including
-// a wrong one. Keep the two literals identical.
-var gateNamesExpectation = []string{
-	"builds", "builds:root", "builds:tools-build",
-	"checked", "checked:root", "checked:tools-build",
-	"fit",
-	"formatted",
-	"integration",
-	"tested", "tested:root", "tested:tools-build",
-}
-
-func TestGateNamesMatchesTheDeclaredSet(t *testing.T) {
-	got := GateNames()
-	if len(got) != len(gateNamesExpectation) {
-		t.Fatalf("GateNames() = %v\nwant %v", got, gateNamesExpectation)
-	}
-	for i, want := range gateNamesExpectation {
-		if got[i] != want {
-			t.Errorf("GateNames()[%d] = %q, want %q (full: %v)", i, got[i], want, got)
-		}
-	}
-}
-
-// Omitting the instance must measure EVERY module. A gate that quietly covered
-// a subset would report a tree sound while part of it was never measured —
-// which is worse than not having the gate, because it reads as coverage.
-func TestGateNamesCoverEveryModule(t *testing.T) {
-	names := GateNames()
-	for _, m := range modules {
-		want := "tested:" + moduleLabel(m)
-		if !contains(names, want) {
-			t.Errorf("no name addresses module %s (expected %q in %v)", m, want, names)
-		}
-	}
-	// And the bare concept must be offered, since that is what runs them all.
-	if !contains(names, "tested") {
-		t.Error("the bare `tested` concept is not offered, so nothing runs every module")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name, env, err := ParseGateArgs(tc.args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseGateArgs(%q) = (%q, %v, nil), want an error", tc.args, name, env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseGateArgs(%q): %v", tc.args, err)
+			}
+			if name != tc.wantName || env != tc.wantEnv {
+				t.Errorf("ParseGateArgs(%q) = (%q, %v), want (%q, %v)",
+					tc.args, name, env, tc.wantName, tc.wantEnv)
+			}
+		})
 	}
 }
 
-// fit is required of every project — gates-and-commands.md lists it beside
-// verify, integration and the judge — and a project that does not answer it is
-// refused by `issue resolve` before its first step runs. So its presence is a
-// contract, not a convenience.
-func TestFitIsProvidedAndAnswers(t *testing.T) {
-	if err := RunGate(t.TempDir(), "fit"); err != nil {
-		t.Fatalf("fit must answer for this project: %v", err)
+// The envelope is written whole and parses as one object. That is what lets a
+// reader tell "measured and reported" from "died part-way" without asking the
+// gate — a truncated envelope is not an envelope.
+func TestEnvelopeIsOneParseableObject(t *testing.T) {
+	env := Envelope{
+		Gate:    "tested",
+		Metrics: []Metric{Count("failed_tests", 3)},
 	}
-	if !contains(GateNames(), "fit") {
-		t.Errorf("fit is not offered by name: %v", GateNames())
-	}
-	if !contains(providedConcepts(), "fit") {
-		t.Errorf("fit is missing from the concepts an unknown name is reported against: %v", providedConcepts())
-	}
-}
-
-// fit measures the machine, so a module cannot narrow it. Its instances name
-// conditions on the host (`fit:disk`), and offering `fit:root` would advertise
-// a narrowing that means nothing — the same rule formatted and integration follow.
-func TestFitTakesNoModuleInstance(t *testing.T) {
-	if err := RunGate(t.TempDir(), "fit:root"); err == nil {
-		t.Error("fit:root accepted; a module does not narrow a measurement of the host")
-	}
-	for _, n := range GateNames() {
-		if strings.HasPrefix(n, "fit:") {
-			t.Errorf("GateNames advertises %q, but fit does not divide by module", n)
-		}
-	}
-}
-
-// fit must NOT be part of integration. A machine that cannot build is not a
-// change that may not land, so folding the two would fail an honest change for
-// a fact about whichever host happened to run it.
-func TestFitIsNotPartOfIntegration(t *testing.T) {
-	for _, c := range measurementOrder {
-		if c == GateFit {
-			t.Fatal("fit is in the measurement composition; it measures the host, not the tree")
-		}
-	}
-}
-
-// integration is the gate a landing decision rests on, so it must exist and
-// must be a composition rather than a single measurement.
-func TestIntegrationRunsEveryOtherGate(t *testing.T) {
-	root := goModuleForTest(t)
-	// An unformatted tree must fail integration, which proves formatted is in
-	// the composition rather than merely offered alongside it.
-	writeFile(t, filepath.Join(root, "bad.go"), "package p\n\nfunc  X( ) {\n}\n")
-
-	if err := RunGate(root, "integration"); err == nil {
-		t.Error("integration passed on a tree that fails one of its constituents")
-	}
-}
-
-// MeasureGate builds the envelope that both `bin/gate --envelope` and
-// `bin/run <gate>` act on, so its shape is a contract rather than a detail.
-func TestMeasureGateReportsAPassingGate(t *testing.T) {
-	root := goModuleForTest(t)
-	writeFile(t, filepath.Join(root, "ok.go"), "package p\n")
-
-	env, err := MeasureGate(root, "formatted")
+	out, err := json.Marshal(env)
 	if err != nil {
-		t.Fatalf("MeasureGate on a formatted tree: %v", err)
+		t.Fatalf("marshal: %v", err)
 	}
-	if env["gate"] != "formatted" {
-		t.Errorf("envelope names the wrong gate: %v", env["gate"])
+	if strings.Contains(string(out), "\n") {
+		t.Error("the envelope spans lines; a reader cannot tell a truncated one from a short one")
 	}
-	if env["measured"] != true {
-		t.Errorf("a passing gate must report measured=true, got %v", env["measured"])
+	var back Envelope
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatalf("the envelope does not round-trip: %v", err)
 	}
-	if _, ok := env["detail"]; ok {
-		t.Errorf("a passing gate carries no detail, got %v", env["detail"])
+	if back.Gate != "tested" || len(back.Metrics) != 1 {
+		t.Fatalf("round-trip lost the measurement: %+v", back)
 	}
-	if _, ok := env["elapsed_seconds"].(float64); !ok {
-		t.Errorf("envelope has no elapsed_seconds: %v", env["elapsed_seconds"])
+	if got := back.Metrics[0]; got.Type != MetricInt || got.Int != 3 {
+		t.Errorf("round-trip = %+v, want an int metric of 3", got)
 	}
-}
-
-// A gate that measured a failure HAS measured. The distinction is the whole
-// reason the envelope carries `measured` rather than an exit status: a failing
-// measurement is a fact to judge, not an error that prevented judging.
-func TestMeasureGateReportsAFailingGateAsMeasured(t *testing.T) {
-	root := goModuleForTest(t)
-	writeFile(t, filepath.Join(root, "bad.go"), "package p\n\nfunc  X( ) {\n}\n")
-
-	env, err := MeasureGate(root, "formatted")
-	if err == nil {
-		t.Fatal("MeasureGate returned no error for a failing gate")
-	}
-	if env["measured"] != false {
-		t.Errorf("a failing gate must report measured=false, got %v", env["measured"])
-	}
-	detail, _ := env["detail"].(string)
-	if !strings.Contains(detail, "bad.go") {
-		t.Errorf("detail does not name the offending file: %q", detail)
+	// Truncation must not parse. If it did, a killed gate would read as a
+	// complete run reporting nothing — exactly backwards.
+	if err := json.Unmarshal(out[:len(out)-5], &back); err == nil {
+		t.Error("a truncated envelope parsed; a killed gate would read as a clean run")
 	}
 }
 
-// The load-bearing side effect: MeasureGate moves the gate's own progress off
-// stdout. `bin/gate --envelope` writes the envelope to stdout and NOTHING else,
-// so a gate that printed there would corrupt the document a runner parses —
-// and the corruption would survive as far as the parse, not the gate.
-func TestMeasureGateLeavesStdoutRestored(t *testing.T) {
-	before := os.Stdout
-	root := goModuleForTest(t)
-	writeFile(t, filepath.Join(root, "ok.go"), "package p\n")
-
-	if _, err := MeasureGate(root, "formatted"); err != nil {
-		t.Fatalf("MeasureGate: %v", err)
+// A gate reports what it measured and does not judge it. Nothing in the gate
+// layer may hold a threshold — the caps live with the judging layer, and a
+// gate that carried its own could be passed by editing the gate.
+func TestGatesHoldNoThresholds(t *testing.T) {
+	env := Envelope{Gate: "tested", Metrics: []Metric{Count("failed_tests", 99)}}
+	if _, err := json.Marshal(env); err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	if os.Stdout != before {
-		t.Error("MeasureGate did not restore os.Stdout, so the caller's product would go to stderr")
+	// Ninety-nine failing tests is a successful RUN of the tested gate. The
+	// measurement is obtained; whether it is acceptable is a different
+	// question, asked elsewhere, against state the gate does not have.
+	if env.Incomplete != "" {
+		t.Error("a gate reporting failures marked its own run incomplete")
 	}
 }
 
-// goModuleForTest returns a directory holding a minimal Go module, so the go
-// tool has something coherent to act on.
-func goModuleForTest(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "go.mod"), "module example.test\n\ngo 1.26\n")
-	return dir
+// The judging half — what the caps do to a measurement, and the wire form of
+// the answer — lives beside the layer that holds them, in run_test.go.
+
+// go test indents a failing subtest under its parent, and a subtest that failed
+// is a failing test.
+func TestFailureCountingReadsIndentedSubtests(t *testing.T) {
+	out := strings.Join([]string{
+		"--- FAIL: TestOuter (0.00s)",
+		"    --- FAIL: TestOuter/inner (0.00s)",
+		"FAIL",
+		"FAIL\tgithub.com/promise-language/flow\t0.012s",
+		"ok  \tgithub.com/promise-language/flow/cli\t0.004s",
+	}, "\n")
+	if got := countPrefixed(out, "--- FAIL:"); got != 2 {
+		t.Errorf("failed_tests = %d, want 2 (the subtest counts)", got)
+	}
+	if got := countPrefixed(out, "FAIL\t"); got != 1 {
+		t.Errorf("failed_packages = %d, want 1 (the bare FAIL line is not a package)", got)
+	}
 }
 
-func contains(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
+// Vet groups its findings under "# package" headers. A header is not a finding.
+func TestVetHeadersAreNotFindings(t *testing.T) {
+	out := strings.Join([]string{
+		"# github.com/promise-language/flow",
+		"artifact.go:12:2: unreachable code",
+		"backend.go:44:9: printf: wrong type",
+		"",
+	}, "\n")
+	if got := countDiagnostics(out); got != 2 {
+		t.Errorf("vet_findings = %d, want 2", got)
+	}
+}
+
+func TestCoverageTotalIsReadFromTheSummaryLine(t *testing.T) {
+	out := strings.Join([]string{
+		"github.com/promise-language/flow/artifact.go:20:\tValid\t\t100.0%",
+		"total:\t(statements)\t63.9%",
+	}, "\n")
+	pct, ok := totalCoverage(out)
+	if !ok || pct != 63.9 {
+		t.Errorf("totalCoverage = (%v, %v), want (63.9, true)", pct, ok)
+	}
+	if _, ok := totalCoverage("no total here"); ok {
+		t.Error("read a total from output that has none")
+	}
+}
+
+// fit is the one gate here whose subject is not the code. It reports the space
+// on both filesystems this project's work writes to, every run — the worktree
+// and the build cache are two requirements and are often not one device, and an
+// envelope whose shape varied by host is one no threshold can be written
+// against.
+//
+// Shape, not magnitude: free space is not a constant a test may assert.
+func TestFitIsAGateAndReportsTwoFilesystems(t *testing.T) {
+	env, err := MeasureGate(t.TempDir(), "fit")
+	if err != nil {
+		t.Fatalf("MeasureGate(fit): %v", err)
+	}
+	if env.Gate != "fit" {
+		t.Errorf("gate = %q, want fit", env.Gate)
+	}
+	if env.Incomplete != "" {
+		t.Fatalf("a machine with a working toolchain reported an incomplete run: %s", env.Incomplete)
+	}
+	byName := map[string]Metric{}
+	for _, m := range env.Metrics {
+		byName[m.Name] = m
+	}
+	for _, want := range []string{"worktree_free_bytes", "build_cache_free_bytes"} {
+		m, ok := byName[want]
+		if !ok {
+			t.Errorf("no %s metric; the envelope is %+v", want, env.Metrics)
+			continue
+		}
+		// A count of bytes is a whole number with a unit beside it. Reported as
+		// a float it would be a different kind of measurement wearing the same
+		// name, and the envelope decoder is entitled to refuse it.
+		if m.Type != MetricInt {
+			t.Errorf("%s is %s, want %s", want, m.Type, MetricInt)
+		}
+		if m.Unit != "bytes" {
+			t.Errorf("%s has unit %q, want bytes", want, m.Unit)
+		}
+		if m.Int <= 0 {
+			t.Errorf("%s = %d; the machine running this test has space", want, m.Int)
 		}
 	}
-	return false
+}
+
+// The two measurements are two requirements, not two devices, and both are
+// reported on the machine where they are one filesystem — a laptop with a
+// single volume, which is most of them. A run that noticed they resolved to the
+// same place and reported one number would give the envelope a shape that
+// depends on the host: the metric a threshold names would simply be absent on
+// half the machines, and absent reads as nothing to judge.
+func TestFitReportsBothFilesystemsWhenTheyAreOneDevice(t *testing.T) {
+	root := t.TempDir()
+	cache := filepath.Join(root, "go-build") // under the worktree: one filesystem, by construction
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeGo(t, "echo "+cache)
+
+	metrics, incomplete, err := measureFit(root)
+	if err != nil {
+		t.Fatalf("measureFit: %v", err)
+	}
+	if incomplete != "" {
+		t.Fatalf("both filesystems were measured and the run called itself incomplete: %s", incomplete)
+	}
+	if len(metrics) != 2 {
+		t.Fatalf("metrics = %+v, want two — one per requirement, whatever the host mounts", metrics)
+	}
+	byName := map[string]Metric{}
+	for _, m := range metrics {
+		byName[m.Name] = m
+	}
+	for _, want := range []string{"worktree_free_bytes", "build_cache_free_bytes"} {
+		if _, ok := byName[want]; !ok {
+			t.Errorf("no %s metric; the envelope is %+v", want, metrics)
+		}
+	}
+}
+
+// A machine whose toolchain cannot say where it writes is not one this
+// project's work runs on — and saying so is what makes fit non-vacuous before
+// any floor exists, because judge() refuses every incomplete run.
+//
+// Named rather than omitted: one filesystem of two IS a run that measured less
+// than a full one, and a short envelope that did not say so would be read as a
+// complete measurement of a machine with less to check.
+func TestFitReportsIncompleteWhenTheBuildCacheIsUnknown(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // `go` is now unresolvable
+	metrics, incomplete, err := measureFit(t.TempDir())
+	if err != nil {
+		t.Fatalf("measureFit gave up entirely; the worktree was still measurable: %v", err)
+	}
+	if incomplete == "" {
+		t.Fatal("one filesystem of two was measured and the run did not say so")
+	}
+	if len(metrics) != 1 || metrics[0].Name != "worktree_free_bytes" {
+		t.Errorf("metrics = %+v, want only the worktree measurement", metrics)
+	}
+	// The reason names what established it. `go` was never started, so there is
+	// no child output to quote — and a reason that trailed off after the colon
+	// would leave an operator to reproduce the condition on the machine that is
+	// already the problem.
+	if strings.HasSuffix(incomplete, ": ") {
+		t.Errorf("incomplete = %q, and names nothing after the colon", incomplete)
+	}
+	// An incomplete run is never a pass, so this is already a refusal today.
+	if acceptable, _, _ := judge(Envelope{Gate: "fit", Metrics: metrics, Incomplete: incomplete}, map[string]Threshold{}); acceptable {
+		t.Error("a machine whose toolchain cannot be reached was judged fit")
+	}
+}
+
+// A toolchain that says something on stderr and names no cache on stdout has
+// not answered, however it exited. What it said reaches the incomplete, and
+// nothing else is reported.
+//
+// The exit-0 case is the one that pins the two streams apart. Read together,
+// the diagnostic IS the answer: it becomes the cache path, freeBytesNear walks
+// it up to the process's own directory, and the run reports a real number about
+// a filesystem nobody asked about — at full size, complete, and wrong.
+func TestFitDoesNotReadTheToolchainsDiagnosticsAsAPath(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		script string
+	}{
+		{"it objected and gave up", `echo 'go: parsing GOFLAGS: non-flag "x"' >&2; exit 2`},
+		{"it warned and answered nothing", `echo 'go: parsing GOFLAGS: non-flag "x"' >&2; echo ""`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fakeGo(t, c.script)
+			metrics, incomplete, err := measureFit(t.TempDir())
+			if err != nil {
+				t.Fatalf("measureFit gave up entirely; the worktree was still measurable: %v", err)
+			}
+			if len(metrics) != 1 || metrics[0].Name != "worktree_free_bytes" {
+				t.Errorf("metrics = %+v, want only the worktree measurement — the toolchain named no cache", metrics)
+			}
+			if !strings.Contains(incomplete, `non-flag "x"`) {
+				t.Errorf("incomplete = %q, want it to carry what the toolchain objected to", incomplete)
+			}
+		})
+	}
+}
+
+// What the toolchain says AROUND its answer is not part of the answer. A
+// machine switching Go versions prints `go: downloading go1.x` to stderr before
+// it prints the path to stdout, and the two read together make a path that
+// names nothing.
+func TestBuildCacheIsTheAnswerAndNotWhatWasSaidAroundIt(t *testing.T) {
+	cache := t.TempDir()
+	fakeGo(t, "echo 'go: downloading go1.99.0 (linux/amd64)' >&2\necho "+cache)
+	path, why := buildCache(t.TempDir())
+	if why != "" {
+		t.Fatalf("the toolchain answered and the answer was refused: %s", why)
+	}
+	if path != cache {
+		t.Errorf("build cache = %q, want %q", path, cache)
+	}
+}
+
+// An answer that is not an absolute path is not a location. freeBytesNear walks
+// up until it finds a filesystem, so a relative answer resolves against the
+// process's own directory — which would be reported as the build cache, and
+// reported completely.
+func TestBuildCacheRefusesAnAnswerThatIsNotAnAbsolutePath(t *testing.T) {
+	fakeGo(t, "echo relative/go-build")
+	path, why := buildCache(t.TempDir())
+	if path != "" {
+		t.Errorf("build cache = %q, want none: it names no filesystem", path)
+	}
+	if !strings.Contains(why, "relative/go-build") || !strings.Contains(why, "absolute") {
+		t.Errorf("why = %q, want it to quote the answer and say what is wrong with it", why)
+	}
+}
+
+// A toolchain that failed has not answered, whatever it left on stdout. The
+// exit code is read BEFORE the path is believed, because a `go env` that dies
+// part-way through writing one leaves a TRUNCATED path behind — and a truncated
+// path is a real directory further up the tree, which freeBytesNear measures
+// without complaint and reports as the build cache.
+func TestBuildCacheRefusesAnAnswerFromAToolchainThatFailed(t *testing.T) {
+	cache := t.TempDir()
+	fakeGo(t, "echo "+cache+"\necho 'go: cannot determine GOCACHE: permission denied' >&2\nexit 1")
+	path, why := buildCache(t.TempDir())
+	if path != "" {
+		t.Errorf("build cache = %q, believed from a toolchain that exited 1", path)
+	}
+	if !strings.Contains(why, "permission denied") {
+		t.Errorf("why = %q, want what the toolchain objected to", why)
+	}
+}
+
+// fakeGo puts a `go` on PATH that behaves as body says.
+//
+// Two streams and an exit code are all these tests need of a toolchain, and a
+// real one cannot be asked to warn on demand — which is exactly the condition
+// under test.
+func fakeGo(t *testing.T, body string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake toolchain is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "go")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil { // WriteFile respects umask; Chmod does not
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+// Every way `go env GOCACHE` can fail to answer produces a reason, because a
+// condition reported without what established it is one an operator has to
+// reproduce before believing it.
+func TestGocacheReasonIsNeverEmpty(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		stderr string
+		err    error
+		want   string
+	}{
+		// The toolchain ran and objected: its own words say the most.
+		{"the child said why", "go: no such env var\nsecond line", errors.New("exit status 1"), "go: no such env var"},
+		// It never ran, so there is nothing to quote and the error is all there is.
+		{"the child never ran", "", errors.New(`exec: "go": executable file not found in $PATH`), "not found"},
+		// It ran, exited 0, and said nothing. Rare, and still not silence.
+		{"the child answered nothing", "", nil, "printed nothing"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := gocacheReason(c.stderr, c.err)
+			if got == "" {
+				t.Fatal("the reason is empty; the incomplete message would trail off after its colon")
+			}
+			if !strings.Contains(got, c.want) {
+				t.Errorf("gocacheReason = %q, want it to carry %q", got, c.want)
+			}
+		})
+	}
+}
+
+// A gate measures and never modifies what it measures. fit is the easiest one
+// to get this wrong in — a free-space probe that wrote a file to find out would
+// be reporting on a tree it had just changed — and measureCovered is the
+// standing example of how much care the rule takes.
+func TestFitModifiesNothing(t *testing.T) {
+	dir := t.TempDir()
+	before, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := measureFit(dir); err != nil {
+		t.Fatalf("measureFit: %v", err)
+	}
+	after, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("the directory held %d entries before and %d after", len(before), len(after))
+	}
+	for i := range after {
+		if after[i].Name() != before[i].Name() {
+			t.Errorf("entry %d is %q, was %q", i, after[i].Name(), before[i].Name())
+		}
+	}
+}
+
+// A build cache that has never been written has no directory yet, and fit runs
+// on exactly that machine — the fresh one, before work is given. A path that is
+// not there yet is the ordinary case, and the filesystem that would hold it is
+// the honest answer about it.
+func TestFreeBytesNearWalksUpToAnExistingAncestor(t *testing.T) {
+	n, err := freeBytesNear(filepath.Join(t.TempDir(), "no", "such", "dir"))
+	if err != nil {
+		t.Fatalf("freeBytesNear refused a path that does not exist yet: %v", err)
+	}
+	if n <= 0 {
+		t.Errorf("freeBytesNear = %d, want the space on the filesystem that would hold it", n)
+	}
+}
+
+// fit is deliberately not part of integration. A machine that cannot build is
+// not a change that may not land, and folding the two together would report an
+// unfit host as a defective change — on every machine the item then reaches.
+//
+// This is the mistake a later reader is most likely to "fix", so it is pinned.
+func TestFitIsNotPartOfIntegration(t *testing.T) {
+	for _, part := range gates["integration"].parts {
+		if part == "fit" {
+			t.Fatal("integration composes fit; an unfit machine would be reported as a change that may not land")
+		}
+	}
+}
+
+// An unfit machine is REPORTED, and reaches the runner as an envelope carrying
+// the reason. Not as an error: bin/gate turns an error from here into no
+// envelope at all, which the runner reads as a gate that printed nothing —
+// the gate looks broken and the machine that is actually the problem is never
+// named. That shape is what this gate exists to replace.
+func TestFitReportsAnUnfitMachineAsAnEnvelopeAndNotAsAnError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // `go` is now unresolvable
+	env, err := MeasureGate(t.TempDir(), "fit")
+	if err != nil {
+		t.Fatalf("the gate failed instead of reporting the machine: %v", err)
+	}
+	if env.Incomplete == "" {
+		t.Error("the envelope does not say the run measured less than a full one")
+	}
+	if len(env.Metrics) != 1 || env.Metrics[0].Name != "worktree_free_bytes" {
+		t.Errorf("metrics = %+v, want the one filesystem that could be measured", env.Metrics)
+	}
+	// And it is still one object a reader can parse. An envelope that carried
+	// the reason but did not survive the wire would be indistinguishable from
+	// the gate dying, which is the other thing that leaves no measurement.
+	out, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back Envelope
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatalf("the envelope does not round-trip: %v", err)
+	}
+	if back.Incomplete != env.Incomplete {
+		t.Errorf("the reason did not survive the wire: %q, was %q", back.Incomplete, env.Incomplete)
+	}
+}
+
+// Stdout carries the envelope and nothing else.
+//
+// fit is the first gate whose child produces an ANSWER rather than lines to
+// count, and the natural way to write that — letting `go env` print where the
+// caller can see it — puts a path on stdout ahead of the envelope. What the
+// runner reads then is not an envelope, so a measured machine is reported as a
+// gate printing rubbish.
+func TestFitSaysNothingOnStdoutAndAnnouncesItselfOnStderr(t *testing.T) {
+	stdout := captureStream(t, &os.Stdout)
+	stderr := captureStream(t, &os.Stderr)
+	if _, err := MeasureGate(t.TempDir(), "fit"); err != nil {
+		t.Fatalf("MeasureGate(fit): %v", err)
+	}
+	if got := stdout(); got != "" {
+		t.Errorf("the gate wrote to stdout, where only the envelope goes:\n%s", got)
+	}
+	// The other half of the same rule: progress is moved, not discarded. A gate
+	// that runs for minutes and says nothing anywhere cannot be told from one
+	// that is wedged.
+	if got := stderr(); !strings.Contains(got, "go env GOCACHE") {
+		t.Errorf("stderr = %q, want the child this gate ran", got)
+	}
+}
+
+// gateOutput's contract after #40: stdout is captured and returned, stderr is
+// passed through to os.Stderr. Before, both streams shared one buffer — a
+// child's diagnostic output was interleaved with its answer, and a person
+// watching saw nothing until the child exited.
+func TestGateOutputDoesNotCaptureStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "both")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho answer\necho progress >&2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stderr := captureStream(t, &os.Stderr)
+	out, err := gateOutput(dir, script)
+	if err != nil {
+		t.Fatalf("gateOutput: %v", err)
+	}
+
+	if !strings.Contains(out, "answer") {
+		t.Errorf("stdout not in return value: %q", out)
+	}
+	if strings.Contains(out, "progress") {
+		t.Error("stderr is in the return value — the streams are combined, not separated")
+	}
+	got := stderr()
+	if !strings.Contains(got, "progress") {
+		t.Errorf("stderr was not passed through to os.Stderr: %q", got)
+	}
+}
+
+// A child that writes far more than any measurement should not exhaust the
+// gate runner. The captured stdout is truncated to the bound.
+func TestGateOutputBoundsStdout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script")
+	}
+	dir := t.TempDir()
+	blocks := (maxToolOutput / 1024) + 10
+	script := filepath.Join(dir, "chatty")
+	if err := os.WriteFile(script, []byte(fmt.Sprintf(
+		"#!/bin/sh\ndd if=/dev/zero bs=1024 count=%d 2>/dev/null\n", blocks,
+	)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Suppress the "==>" prefix on stderr.
+	captureStream(t, &os.Stderr)
+	out, _ := gateOutput(dir, script)
+	if len(out) > maxToolOutput {
+		t.Errorf("output is %d bytes, want at most %d — the capture is unbounded", len(out), maxToolOutput)
+	}
+}
+
+// gateValue keeps the two streams apart AND bounds both. A child that writes
+// far more than its answer on either stream must not exhaust the process.
+func TestGateValueBoundsBothStreams(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script")
+	}
+	dir := t.TempDir()
+	blocks := (maxToolOutput / 1024) + 10
+	script := filepath.Join(dir, "chatty")
+	if err := os.WriteFile(script, []byte(fmt.Sprintf(
+		"#!/bin/sh\ndd if=/dev/zero bs=1024 count=%d 2>/dev/null\ndd if=/dev/zero bs=1024 count=%d >&2 2>/dev/null\n",
+		blocks, blocks,
+	)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStream(t, &os.Stderr)
+	stdout, stderr, _ := gateValue(dir, script)
+	if len(stdout) > maxToolOutput {
+		t.Errorf("stdout is %d bytes, want at most %d", len(stdout), maxToolOutput)
+	}
+	if len(stderr) > maxToolOutput {
+		t.Errorf("stderr is %d bytes, want at most %d", len(stderr), maxToolOutput)
+	}
+}
+
+// captureStream redirects one of this process's own streams for the rest of the
+// test and returns what was written to it. The stream is redirected rather than
+// wrapped because the rule under test is about the file descriptor a child
+// inherits, not about anything this package prints through.
+func captureStream(t *testing.T, stream **os.File) func() string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := *stream
+	*stream = f
+	t.Cleanup(func() {
+		*stream = saved
+		f.Close()
+	})
+	return func() string {
+		b, err := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
 }
