@@ -13,7 +13,7 @@ The pattern was distilled from a real compiler's dev tooling, where bash + Power
 
 - **This doc** (`docs/blueprint.md`) — the model and the rationale.
 - **`cmd/init`** — a scaffolder. Run it in a target repo and it lays down the file structure described in §2. After it exits, the target repo owns every line. Forge is *not* a runtime dependency at that point.
-- **`primitives/`** — optional helper library for the genuinely-stable bits (FNV-128a hash, ldflags-injected `repoRoot` accessor, file lock, OS detection, exec helpers, interrupt handler). Import it OR copy the source into your own `common/` — both supported. Pipeline orchestration (`RunBuild`, `RunVerify`, etc.) is project-specific by nature and stays in each adopter's own `tools/build/common/`.
+- **`primitives/`** — the shared library the tools are built from (FNV-128a hash, staleness check, OS detection, exec helpers, flag normalization, help handling, git-hook wiring). A project depends on it at a pinned version in its `tools/build/go.mod`; [`primitives.md`](primitives.md) states what belongs in it and why the pin is what makes that safe. Pipeline orchestration (`RunVerify`, the gate set, the judging terms) is project-specific by nature and stays in each adopter's own `tools/build/common/`.
 
 ---
 
@@ -218,7 +218,7 @@ Essential common helpers to write first:
 | `Interrupted() bool` | True if Ctrl+C was received; checked between pipeline steps. |
 | `SetupLocalCache(repoRoot) error` | Set env vars so the project's tooling uses `<repoRoot>/.<project>-home/` instead of `~`. |
 
-Many of these have stable, generic implementations in [`primitives/`](../primitives/); pipeline-orchestration helpers (`RunBuild`, `RunVerify`, `RunTest`, …) are project-specific and stay in each adopter's own `common/`.
+These are [`primitives/`](../primitives/), imported rather than copied ([`primitives.md`](primitives.md) §1). Pipeline-orchestration helpers (`RunVerify`, `RunGate`, the judging terms) are project-specific and stay in each adopter's own `common/`.
 
 Note: there is no `FindRoot()`. Each tool's `main.go` already has `repoRoot` as a package-level variable, populated by ldflags at build time. Common helpers that need it take it as a parameter.
 
@@ -401,7 +401,7 @@ The easiest path is `go run github.com/promise-language/forge/cmd/init@latest` i
 
 2. **Initialize `tools/build/` as a Go module.** `cd tools/build && go mod init <module-name>/tools/build`. Add it to `go.work` if the project already has one; otherwise just leave it as an island Go module.
 
-3. **Write `common/hash.go`, `stale.go`, `platform.go`, `exec.go`, `args.go`.** These are the load-bearing primitives. Either import `github.com/promise-language/forge/primitives` for the stable subset, or copy the source in directly. There is no `common/root.go` — root is baked into each tool's `main` by the meta-builder. Helpers that need root take it as a `repoRoot string` parameter.
+3. **Depend on `github.com/promise-language/forge/primitives`** at an exact version. It carries the load-bearing helpers — the hash, the staleness check, OS detection, exec, flag normalization, help — and a project writes none of them itself ([`primitives.md`](primitives.md) §1). There is no `common/root.go` — root is baked into each tool's `main` by the meta-builder. Helpers that need root take it as a `repoRoot string` parameter.
 
 4. **Write `cmd/make/main.go`.** Just the meta-builder — discover `cmd/` subdirs, build each into `bin/`, write the hash sidecar, wire up git hooks via `RunSetup`.
 
@@ -447,7 +447,7 @@ The first 8 steps get you a working bootstrap; the remaining 7 get you the full 
 - **No "framework". ** `common/` is a flat package of helpers, not an abstraction. Each tool's `cmd/<name>/main.go` calls the helpers directly.
 - **No silent failures.** Every error path returns a wrapped error with context. The verify summary always prints, even on failure, so an agent can grep the result without re-running.
 - **No tests-in-precommit-hook.** Tests run in `bin/verify` which the developer runs explicitly. The hook stays sub-second so it never gets disabled.
-- **No runtime dependency on Forge.** Once `cmd/init` has run, the project owns its tooling. Forge upstream changes do not affect existing adopters unless they explicitly pull in a new `primitives/` version.
+- **No *unpinned* dependency on Forge.** The tools module depends on `primitives/` at an exact version recorded in its own `go.mod` and `go.sum`, so an upstream change reaches a project when that project raises the version and never before ([`primitives.md`](primitives.md) §3). What the project owns is the pipeline and the pin; what it does not own is a private copy of a helper with one right answer.
 
 ---
 
@@ -467,4 +467,4 @@ Where each piece lives in [`cmd/init/main.go`](../cmd/init/main.go):
 
 The gate registry (`project.toml`, §10) and ratcheted baselines (`.baselines.json` with `gate.go` / `commitgate.go`, §11) are described in this doc as the model to grow into; they are not part of the starter the scaffolder emits, so adopt them by following §10–§11 directly.
 
-The reusable, low-churn subset of the common helpers is also published as the importable [`primitives/`](../primitives/) package, for adopters who would rather depend on it than copy the scaffolded source.
+The low-churn helpers are not among those constants: they are the importable [`primitives/`](../primitives/) package, which the scaffolded module depends on rather than reproduces ([`primitives.md`](primitives.md) §1).

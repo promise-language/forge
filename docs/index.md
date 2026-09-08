@@ -21,6 +21,8 @@ under-report and read as nearly done.
 
 - [blueprint.md](blueprint.md) — The build / verify / gate tooling pattern, packaged as a
   generic recipe and scaffolder.
+- [primitives.md](primitives.md) — The shared library every managed project's dev tooling is
+  built from, and how a project depends on it.
 
 ## Organization-wide corpus — binding
 
