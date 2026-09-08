@@ -1,4 +1,4 @@
-package common
+package primitives
 
 // RunSetup wires git to use the in-repo .githooks directory. Idempotent and
 // fast, so the meta-builder calls it on every run; a fresh clone gets its

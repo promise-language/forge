@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/promise-language/forge/primitives"
 	"github.com/promise-language/forge/tools/build/common"
 )
 
@@ -21,9 +22,9 @@ Sets git's core.hooksPath to .githooks so the repo's pre-commit gate runs.
 Idempotent; ./make also runs this on every invocation.`
 
 func main() {
-	common.MaybeHelp(os.Args[1:], usage)
+	primitives.MaybeHelp(os.Args[1:], usage)
 	common.CheckStale(repoRoot, sourceHash)
-	if err := common.RunSetup(repoRoot); err != nil {
+	if err := primitives.RunSetup(repoRoot); err != nil {
 		fmt.Fprintln(os.Stderr, "setup failed:", err)
 		os.Exit(1)
 	}

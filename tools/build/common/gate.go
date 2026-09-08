@@ -28,6 +28,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/promise-language/forge/primitives"
 )
 
 // MetricType is what kind of number a measurement is. The set is closed.
@@ -381,7 +383,7 @@ func MeasureGate(repoRoot, name string) (Envelope, error) {
 // is refused rather than ignored, and a second name is refused rather than
 // silently dropped.
 func ParseGateArgs(repoRoot string, args []string) (name string, envelope bool, err error) {
-	for _, a := range NormalizeArgs(args) {
+	for _, a := range primitives.NormalizeArgs(args) {
 		switch {
 		case a == "-envelope":
 			envelope = true
@@ -430,7 +432,7 @@ func measureFormatted(repoRoot string, _ []string) ([]Metric, string, error) {
 func modules(repoRoot string) []string {
 	dirs := []string{repoRoot}
 	tools := filepath.Join(repoRoot, "tools", "build")
-	if Exists(filepath.Join(tools, "go.mod")) {
+	if primitives.Exists(filepath.Join(tools, "go.mod")) {
 		dirs = append(dirs, tools)
 	}
 	return dirs
@@ -668,7 +670,7 @@ func gocacheReason(stderr string, err error) string {
 // a path that is not there yet is the ordinary case rather than an error.
 func freeBytesNear(path string) (int64, error) {
 	for p := filepath.Clean(path); ; {
-		if Exists(p) {
+		if primitives.Exists(p) {
 			return freeBytes(p)
 		}
 		parent := filepath.Dir(p)

@@ -28,39 +28,6 @@ func gitRepo(t *testing.T) string {
 	return root
 }
 
-func TestRunSetupWiresTheInRepoHooks(t *testing.T) {
-	root := gitRepo(t)
-	if err := RunSetup(root); err != nil {
-		t.Fatal(err)
-	}
-	got, err := RunOutputIn(root, "git", "config", "core.hooksPath")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != ".githooks" {
-		t.Errorf("core.hooksPath = %q, want .githooks", got)
-	}
-	// Idempotent: the meta-builder calls it on every run.
-	if err := RunSetup(root); err != nil {
-		t.Errorf("a second run failed: %v", err)
-	}
-}
-
-// Every recovery path in this workspace ends at ./make, and it has to be spelled
-// the way the host can actually run it.
-func TestMakeCmdMatchesTheHost(t *testing.T) {
-	got := MakeCmd()
-	if IsWindows() {
-		if got != ".\\make.cmd" {
-			t.Errorf("MakeCmd = %q on windows", got)
-		}
-		return
-	}
-	if got != "./make" {
-		t.Errorf("MakeCmd = %q, want ./make", got)
-	}
-}
-
 func TestGateBinaryIsTheFixedEntryPoint(t *testing.T) {
 	if got, want := GateBinary("/repo"), filepath.Join("/repo", "bin", "gate"); got != want {
 		t.Errorf("GateBinary = %q, want %q", got, want)
