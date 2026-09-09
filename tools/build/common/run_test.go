@@ -15,7 +15,7 @@ import (
 // a number to a threshold. Both modes come through judge(), so a test of
 // judge() is a test of what a person sees and of what the SDK is told.
 
-// writeManifest writes a thresholds.json into dir and returns the dir.
+// writeManifest writes a thresholds manifest into dir and returns the dir.
 func writeManifest(t *testing.T, manifest map[string]Threshold) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -23,10 +23,22 @@ func writeManifest(t *testing.T, manifest map[string]Threshold) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ManifestFile), data, 0644); err != nil {
+	writeManifestBytes(t, dir, data)
+	return dir
+}
+
+// writeManifestBytes puts body where loadManifest looks, creating the
+// directories the manifest's path implies. The path comes from ManifestFile so
+// a moved manifest moves the tests with it.
+func writeManifestBytes(t *testing.T, dir string, body []byte) {
+	t.Helper()
+	path := filepath.Join(dir, filepath.FromSlash(ManifestFile))
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
-	return dir
+	if err := os.WriteFile(path, body, 0644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // testedManifest is the manifest shape most tests use: the two metrics the
@@ -589,10 +601,7 @@ func TestLoadManifest_MissingFile(t *testing.T) {
 
 func TestLoadManifest_UnknownDirection(t *testing.T) {
 	dir := t.TempDir()
-	data := []byte(`{"x": {"direction": "around", "cap": 5}}`)
-	if err := os.WriteFile(filepath.Join(dir, ManifestFile), data, 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeManifestBytes(t, dir, []byte(`{"x": {"direction": "around", "cap": 5}}`))
 	_, err := loadManifest(dir)
 	if err == nil {
 		t.Fatal("loadManifest accepted an unknown direction")
@@ -604,9 +613,7 @@ func TestLoadManifest_UnknownDirection(t *testing.T) {
 
 func TestLoadManifest_MalformedJSON(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte("{not json"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeManifestBytes(t, dir, []byte("{not json"))
 	_, err := loadManifest(dir)
 	if err == nil {
 		t.Fatal("loadManifest accepted malformed JSON")

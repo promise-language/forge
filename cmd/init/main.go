@@ -735,14 +735,15 @@ func verifySteps(repoRoot string) []step {
 
 // verifiedTreeGo is the writing end of the verified-tree contract. It is
 // authored with § standing in for the backtick, as buildDocRaw is; the Go raw
-// string literal holding it cannot contain one.
+// string literal holding it cannot contain one. Nothing inside it may use § for
+// anything else — a section sign would be written out as a backtick.
 var verifiedTreeGo = substituteBackticks(verifiedTreeGoRaw)
 
 const verifiedTreeGoRaw = `package common
 
 // This file is the writing end of the verified-tree contract: bin/verify
 // records the tree it blessed at .workspace/verified-tree, and the commit gate
-// refuses a commit whose staged tree differs (docs/blueprint.md §7, §9).
+// refuses a commit whose staged tree differs.
 //
 // The reading end is not in this repository. bin/precommit-guard is a workspace
 // tool, built and owned there, and this module cannot import it. What the two

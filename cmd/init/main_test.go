@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"maps"
 	"os"
 	"os/exec"
@@ -225,6 +226,38 @@ func TestSubstituteBackticks(t *testing.T) {
 	}
 }
 
+// § stands in for the backtick in every constant substituteBackticks touches,
+// so inside one of those it can mean nothing else. A section reference written
+// there as §7 reaches the adopter's tree as `7 — a mangled comment nobody
+// upstream ever reads, because the scaffolder's own source looks right.
+//
+// The two spellings are each other's tell, and neither needs to know which
+// constants were substituted: in an emitted body a § is a section sign, so it
+// is followed by a digit, and a backtick opens code, so it is not. Every body
+// is checked, so the next constant authored with § inherits the check rather
+// than the defect.
+func TestEmittedFilesUseTheSectionSignOnlyForBackticks(t *testing.T) {
+	for _, f := range files() {
+		for _, line := range strings.Split(f.body, "\n") {
+			if next, ok := charAfter(line, "`"); ok && next >= '0' && next <= '9' {
+				t.Errorf("%s: a section sign was substituted as a backtick: %q", f.path, line)
+			}
+			if next, ok := charAfter(line, "§"); ok && !(next >= '0' && next <= '9') {
+				t.Errorf("%s: a backtick placeholder was written out unsubstituted: %q", f.path, line)
+			}
+		}
+	}
+}
+
+// charAfter reports the byte following the first occurrence of sub in line.
+func charAfter(line, sub string) (byte, bool) {
+	i := strings.Index(line, sub)
+	if i < 0 || i+len(sub) >= len(line) {
+		return 0, false
+	}
+	return line[i+len(sub)], true
+}
+
 func TestFilesAreDistinctAndNonEmpty(t *testing.T) {
 	seen := map[string]bool{}
 	for _, f := range files() {
@@ -423,6 +456,73 @@ func TestScaffoldedHookNamesTheWorkspaceCommitGate(t *testing.T) {
 		if strings.Contains(preCommitHook, twin) {
 			t.Errorf("the pre-commit hook still names the local twin %q", twin)
 		}
+	}
+}
+
+// The hook's three branches, run as the shell runs them. Which branch a
+// checkout takes is the judgement this layout rests on — fail closed where the
+// project opted into a workspace, and get out of the way where it did not — and
+// reading the text for substrings cannot tell a correct branch from an inverted
+// one.
+func TestScaffoldedHookBranchesOnWhatTheCheckoutOptedInto(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash on this machine")
+	}
+	// hook lays the trampoline down in a fresh root and runs it, returning the
+	// exit code and what it said.
+	hook := func(t *testing.T, setup func(root string)) (int, string) {
+		t.Helper()
+		root := t.TempDir()
+		write(t, root, ".githooks/pre-commit", preCommitHook)
+		if err := os.Chmod(filepath.Join(root, ".githooks", "pre-commit"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		setup(root)
+		cmd := exec.Command("bash", filepath.Join(root, ".githooks", "pre-commit"))
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		code := 0
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			code = exit.ExitCode()
+		} else if err != nil {
+			t.Fatalf("running the hook: %v", err)
+		}
+		return code, string(out)
+	}
+
+	// The guard is installed: the hook execs it and adds nothing of its own.
+	code, out := hook(t, func(root string) {
+		write(t, root, "bin/precommit-guard", "#!/usr/bin/env bash\necho GUARD RAN\nexit 3\n")
+		if err := os.Chmod(filepath.Join(root, "bin", "precommit-guard"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if code != 3 || !strings.Contains(out, "GUARD RAN") {
+		t.Errorf("an installed guard was not exec'd: exit %d, output %q", code, out)
+	}
+
+	// Provisioned, guard missing: refuse, and name the recovery. This is the
+	// fail-closed case, and it is the one an inverted condition would lose.
+	code, out = hook(t, func(root string) {
+		write(t, root, ".workspace/project.json", "{}\n")
+	})
+	if code == 0 {
+		t.Errorf("a provisioned checkout with no guard allowed the commit: %q", out)
+	}
+	if !strings.Contains(out, "workspace update") {
+		t.Errorf("the refusal does not name the recovery: %q", out)
+	}
+
+	// Never opted in: nothing was promised, so the hook names this project's own
+	// gate and lets the commit through rather than demanding a tool the adopter
+	// cannot obtain.
+	code, out = hook(t, func(string) {})
+	if code != 0 {
+		t.Errorf("a checkout that adopted no workspace was blocked: exit %d, %q", code, out)
+	}
+	if !strings.Contains(out, "bin/verify") {
+		t.Errorf("the hook does not name this project's gate: %q", out)
 	}
 }
 
