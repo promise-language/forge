@@ -1,11 +1,11 @@
 # Forge
 
-Dev tooling blueprint and scaffolding. Drop one `./make` into a project and get every dev tool compiled into `bin/`, a `bin/verify` commit gate, ratcheted quality baselines, and a Claude Code guard hook — all from a single in-repo Go module that the project owns end-to-end.
+Dev tooling blueprint and scaffolding. Drop one `./make` into a project and get every dev tool compiled into `bin/`, a `bin/verify` commit gate, and the `bin/gate` / `bin/run` entry points that let anything outside the tree measure the project and judge what it measured — all from a single in-repo Go module that the project owns end-to-end.
 
 ## What's here
 
-- **[`docs/blueprint.md`](docs/blueprint.md)** — the design doc. Explains the model, the file layout, the staleness check, the verify pipeline, the gate registry, and the ratchet system. Read this first.
-- **`cmd/init/`** — scaffolding tool. Lays down the file structure in a target repo (`./make`, `make.cmd`, `tools/build/` with one `cmd/<tool>/main.go` per binary, `.githooks/pre-commit`, `.claude/settings.json`, `project.toml` stub) and exits. After it runs, the target repo owns every line.
+- **[`docs/blueprint.md`](docs/blueprint.md)** — the design doc. Explains the model, the file layout, the staleness check, the verify pipeline, the gate and judge entry points, and the tools a project does not build because another party owns them. Read this first.
+- **`cmd/init/`** — scaffolding tool. Lays down the file structure in a target repo (`./make`, `make.cmd`, `tools/build/` with one `cmd/<tool>/main.go` per binary, the judging terms in `tools/gates/`, `.githooks/pre-commit`, `.claude/settings.json`) and exits. After it runs, the target repo owns every line.
 - **`primitives/`** — the shared library the tools are built from: hashing, the staleness check, OS detection, exec helpers, flag normalization, help handling, git-hook wiring. A project depends on it at a pinned version, which is what keeps an upstream change from reaching a build nobody asked to change. See **[`docs/primitives.md`](docs/primitives.md)**.
 
 ## Getting started
@@ -29,7 +29,7 @@ The design optimizes for:
 - **Pinned, not copied**: each project owns its pipeline and the exact version of the shared helpers it builds against. No upstream library that can break your build on a Sunday, and no private copy of a helper that has one right answer.
 - **Cross-platform without drift**: one source of truth, in Go, with `runtime.GOOS` checks where behavior must differ.
 - **Agent-friendly**: deterministic root resolution (baked in at link time), explicit failure modes, summary blocks that survive `tail -40`.
-- **Ratcheted quality**: metrics like test count, coverage, leak count are committed to `.baselines.json` and can only move in the approved direction.
+- **Judged, not asserted**: every gate reports measurements and no verdict; the caps a verdict is reached against are a committed artefact in `tools/gates/`, reviewed with the code they judge.
 
 ## License
 

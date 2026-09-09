@@ -1,17 +1,30 @@
 #!/usr/bin/env bash
-# Git pre-commit trampoline — execs the commit gate, or refuses the commit.
-# Wired up by 'git config core.hooksPath .githooks', which ./make runs for you.
+# Git pre-commit trampoline — execs the workspace commit guard, or names the
+# gate to run instead. Wired up by 'git config core.hooksPath .githooks', which
+# ./make runs for you.
+#
+# bin/precommit-guard is a WORKSPACE tool, not one ./make builds: a project may
+# not build a twin of a tool the workspace is accountable for (tool-contract §5
+# — one name, one builder), so this hook names it directly and never falls back
+# to a local copy.
+#
+# It fails closed where the project opted in, and only there. The marker
+# .workspace/project.json is what provisioning writes, so its presence is this
+# checkout's own statement that a workspace manages it: with the marker, a
+# missing guard refuses the commit and names the recovery. Without it nothing
+# was promised (tool-contract §1 — fail-closed is a consequence of having opted
+# in, never a tax on a repo that did not), the project's gate is bin/verify, and
+# this hook says so and gets out of the way rather than demanding a tool the
+# adopter cannot obtain.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -x "$root/bin/precommit-guard" ]; then
     exec "$root/bin/precommit-guard"
 fi
-# Fail closed: the commit gate is mandatory. If bin/precommit-guard is missing, a
-# commit could slip past every check — so block it and demand provisioning.
-#
-# precommit-guard is a WORKSPACE tool, not one forge builds: ./make cannot supply
-# it, so the recovery is `workspace setup` rather than a local bootstrap. forge
-# deliberately builds no twin of it (docs/tool-contract.md §5 — one name, one
-# builder), which is why this hook names it directly.
-echo "pre-commit: bin/precommit-guard not installed — run 'workspace setup' on this checkout, then commit" >&2
-exit 1
+if [ -f "$root/.workspace/project.json" ]; then
+    echo "pre-commit: this checkout is provisioned but bin/precommit-guard is missing —" >&2
+    echo "            run 'workspace update' (or 'workspace setup'), then commit" >&2
+    exit 1
+fi
+echo "pre-commit: no workspace commit guard is installed here; the gate in this project" >&2
+echo "            is bin/verify — run it before committing" >&2
