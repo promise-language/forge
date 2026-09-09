@@ -611,6 +611,26 @@ func TestLoadManifest_UnknownDirection(t *testing.T) {
 	}
 }
 
+// This repository's own terms, read from the fixed path the constant names.
+//
+// Every other test here writes its manifest through ManifestFile, so the
+// constant and the tests move together and neither can notice that the file in
+// the tree stayed where it was. Nothing else would: the commit gate runs format
+// → vet → build → test and no gate, so a judge that cannot find its terms —
+// which refuses every gate it is asked about — would reach a runner green.
+func TestLoadManifest_ThisRepositoryCarriesItsTermsAtThatPath(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	manifest, err := loadManifest(root)
+	if err != nil {
+		t.Fatalf("this repository's own thresholds do not load from %s: %v", ManifestFile, err)
+	}
+	// An empty manifest is a judge that accepts everything, and a verdict
+	// carrying no terms is one nothing can re-check.
+	if len(manifest) == 0 {
+		t.Errorf("%s caps nothing", ManifestFile)
+	}
+}
+
 func TestLoadManifest_MalformedJSON(t *testing.T) {
 	dir := t.TempDir()
 	writeManifestBytes(t, dir, []byte("{not json"))

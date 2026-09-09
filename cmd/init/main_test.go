@@ -275,7 +275,8 @@ func TestFilesAreDistinctAndNonEmpty(t *testing.T) {
 	for _, want := range []string{
 		"make", "make.cmd", "tools/build/go.mod", ".githooks/pre-commit",
 		"tools/build/cmd/gate/main.go", "tools/build/cmd/run/main.go",
-		"tools/gates/thresholds.json", ".claude/settings.json",
+		"tools/gates/thresholds.json", "tools/gates/baselines.json",
+		"docs/index.md", ".claude/settings.json",
 	} {
 		if !seen[want] {
 			t.Errorf("%s is not scaffolded", want)
@@ -365,6 +366,14 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 			t.Errorf("bin/gate --list does not name %q:\n%s", want, list)
 		}
 	}
+	// One name per line, because that is what an orchestrator parses. A usage
+	// paragraph that happened to mention both names would satisfy the check
+	// above and nothing downstream.
+	for _, line := range strings.Split(strings.TrimSpace(list), "\n") {
+		if len(strings.Fields(line)) != 1 {
+			t.Errorf("bin/gate --list printed a line that is not one name: %q", line)
+		}
+	}
 
 	// The envelope is ALL of stdout, so a caller redirecting stdout to a parser
 	// gets one object or nothing.
@@ -410,6 +419,125 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 	if len(got.Thresholds) == 0 {
 		t.Errorf("the verdict carries no thresholds: %s", out)
 	}
+
+	// Everything above is the path where nothing is wrong. What follows is the
+	// other direction, on the same built tree: a refusal, a measurement that
+	// fails its term, and a red run.
+
+	// Every way out of bin/gate that is not a complete envelope leaves stdout
+	// empty and exits non-zero — a caller redirecting stdout to a parser gets an
+	// envelope or nothing, and "nothing" must not look like success. The emitted
+	// unit tests deliberately stop at the argument parsing and leave this to
+	// cmd/gate, so the boundary is the only place it is visible.
+	t.Run("a refusing gate writes nothing to stdout", func(t *testing.T) {
+		for _, args := range [][]string{
+			{"fit"},                        // measurements with no verdict, read as a pass by the first wrapper
+			{"no-such-gate", "--envelope"}, // an empty envelope, read as a clean result
+			{"-h"},                         // usage, which here goes to stderr unlike every other tool
+		} {
+			cmd := exec.Command(filepath.Join(dir, "bin", "gate"), args...)
+			cmd.Dir = dir
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err == nil {
+				t.Errorf("gate %v exited 0", args)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("gate %v wrote %q to stdout while refusing", args, stdout.String())
+			}
+			if stderr.Len() == 0 {
+				t.Errorf("gate %v refused without saying why", args)
+			}
+		}
+	})
+
+	// The verdict is the JSON, not the exit status: an SDK reads .acceptable, so
+	// a measurement over its cap still comes back as one object on stdout and
+	// exit 0. It is also the only check that the emitted terms can refuse
+	// anything — an acceptable verdict looks the same against a manifest that
+	// caps nothing as against one that caps everything.
+	t.Run("a measurement over its cap is a verdict, not an error", func(t *testing.T) {
+		refused := exec.Command(filepath.Join(dir, "bin", "run"), "fit", "--verdict")
+		refused.Dir = dir
+		refused.Stdin = bytes.NewReader(withMetricValue(t, stdout, "missing_prereqs", 2))
+		var body, stderr bytes.Buffer
+		refused.Stdout, refused.Stderr = &body, &stderr
+		if err := refused.Run(); err != nil {
+			t.Fatalf("a measurement over its cap made the judge fail: %v\n%s%s", err, body.String(), stderr.String())
+		}
+		var got struct {
+			Acceptable bool               `json:"acceptable"`
+			Thresholds map[string]float64 `json:"thresholds"`
+			Detail     string             `json:"detail"`
+		}
+		if err := json.Unmarshal(body.Bytes(), &got); err != nil {
+			t.Fatalf("the verdict is not one JSON object: %v\n%s", err, body.String())
+		}
+		if got.Acceptable {
+			t.Errorf("2 missing prerequisites was acceptable against a cap of 0: %s", body.String())
+		}
+		// The term it was refused on, or nobody can tell which cap it broke.
+		if !strings.Contains(got.Detail, "missing_prereqs") {
+			t.Errorf("the refusal does not name the term it rests on: %s", body.String())
+		}
+		if _, ok := got.Thresholds["missing_prereqs"]; !ok {
+			t.Errorf("the applied term was not reported: %s", body.String())
+		}
+	})
+
+	// A red run blesses nothing. verify clears the record before its first step
+	// and writes it after its last, so a tree that failed is never one the
+	// commit gate lets through — and the failure direction is the one that
+	// degrades into a permanent blessing without anyone noticing.
+	//
+	// A root go.mod is what switches the emitted pipeline from stubs to real go
+	// tooling, which is what lets this run go red at all. It is written last
+	// because it changes the tree every assertion above measured.
+	t.Run("a failing verify leaves no blessing", func(t *testing.T) {
+		write(t, dir, "go.mod", "module example\n\ngo 1.26\n")
+		write(t, dir, "broken.go", "package main\n\nfunc (\n")
+		red := exec.Command(filepath.Join(dir, "bin", "verify"))
+		red.Dir = dir
+		out, err := red.CombinedOutput()
+		if err == nil {
+			t.Fatalf("verify passed on a tree that does not parse:\n%s", out)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".workspace", "verified-tree")); !os.IsNotExist(err) {
+			t.Errorf("a failed verify left the previous run's blessing behind (stat err = %v)", err)
+		}
+	})
+}
+
+// withMetricValue returns the envelope with one metric's value replaced, so the
+// judge is handed a measurement a gate really produced rather than a
+// hand-written object that only resembles one.
+func withMetricValue(t *testing.T, envelope []byte, metric string, value float64) []byte {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(envelope, &doc); err != nil {
+		t.Fatal(err)
+	}
+	metrics, ok := doc["metrics"].([]any)
+	if !ok {
+		t.Fatalf("the envelope carries no metrics: %s", envelope)
+	}
+	found := false
+	for _, m := range metrics {
+		entry, ok := m.(map[string]any)
+		if !ok || entry["name"] != metric {
+			continue
+		}
+		entry["value"] = value
+		found = true
+	}
+	if !found {
+		t.Fatalf("the envelope does not report %s: %s", metric, envelope)
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // The tool set the scaffolder emits, asserted as a set: an omission and a
