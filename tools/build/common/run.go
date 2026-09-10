@@ -54,15 +54,17 @@ type Threshold struct {
 	Cap       float64   `json:"cap"`
 }
 
-// ManifestFile is the name of the thresholds manifest, versioned with the tree
-// it judges. A project with a judge must have one.
-const ManifestFile = "thresholds.json"
+// ManifestFile is the thresholds manifest, versioned with the tree it judges.
+// A project with a judge must have one, and the path is fixed rather than
+// configurable: it is what lets something outside the project establish that
+// the terms are an artefact distinct from the judge (blueprint.md §12).
+const ManifestFile = "tools/gates/thresholds.json"
 
 // loadManifest reads the thresholds manifest from a repo root. An absent file
 // is an error — a project with a judge must have a manifest. An unknown
 // direction value is an error — the set is closed.
 func loadManifest(repoRoot string) (map[string]Threshold, error) {
-	data, err := os.ReadFile(filepath.Join(repoRoot, ManifestFile))
+	data, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(ManifestFile)))
 	if err != nil {
 		return nil, fmt.Errorf("loading thresholds manifest: %w", err)
 	}
