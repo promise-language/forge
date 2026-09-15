@@ -504,12 +504,14 @@ func NormalizeArgs(args []string) []string {
 	return out
 }
 
-// HasHelpFlag reports whether args request usage. It normalizes first and then
-// compares, so --help, -help, --h and -h are all one case rather than four
-// string comparisons that each tool gets slightly differently wrong.
+// HasHelpFlag reports whether args request usage.
+//
+// The name is -help and only -help. Both prefixes are the same flag, so
+// --help and -help both match after NormalizeArgs; -h and --h do not, because
+// an abbreviation is not a flag at all but unknown input (cli-guide §3, §8).
 func HasHelpFlag(args []string) bool {
 	for _, a := range NormalizeArgs(args) {
-		if a == "-h" || a == "-help" {
+		if a == "-help" {
 			return true
 		}
 	}
@@ -2362,7 +2364,7 @@ var (
 func usage() string {
 	var sb strings.Builder
 	sb.WriteString("run — measure one gate and judge what it measured.\n\n")
-	sb.WriteString("Usage:\n  run <gate> [-h | -help]\n  run <gate> --verdict < envelope\n\n")
+	sb.WriteString("Usage:\n  run <gate> [-help]\n  run <gate> --verdict < envelope\n\n")
 	sb.WriteString("Runs bin/gate <gate> --envelope, then prints each measurement beside the\n")
 	sb.WriteString("term it was judged on. Exit 0 means every capped measurement is within its\n")
 	sb.WriteString("cap; non-zero means one is not, or that nothing could be measured.\n\n")

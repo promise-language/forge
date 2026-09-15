@@ -93,7 +93,7 @@ func main() {
 	// measurement that reads like a clean result.
 	name, envelope, err := common.ParseGateArgs(repoRoot, args)
 	if err != nil {
-		fail("%v; run `%s -h` for usage", err, os.Args[0])
+		fail("%v; run `%s -help` for usage", err, os.Args[0])
 	}
 	if !envelope {
 		fail("refusing to measure without --envelope; run `run %s` for a result "+

@@ -433,7 +433,7 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 		for _, args := range [][]string{
 			{"fit"},                        // measurements with no verdict, read as a pass by the first wrapper
 			{"no-such-gate", "--envelope"}, // an empty envelope, read as a clean result
-			{"-h"},                         // usage, which here goes to stderr unlike every other tool
+			{"-help"},                      // usage, which here goes to stderr unlike every other tool
 		} {
 			cmd := exec.Command(filepath.Join(dir, "bin", "gate"), args...)
 			cmd.Dir = dir

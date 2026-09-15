@@ -15,36 +15,6 @@ func mkdirs(t *testing.T, root string, names ...string) {
 	}
 }
 
-// Tools are discovered, not enumerated: a directory under cmd/ is a tool, and
-// `make` itself is not one because it runs via `go run` and is never built.
-func TestDiscoverToolsIsSortedAndExcludesMake(t *testing.T) {
-	dir := t.TempDir()
-	mkdirs(t, dir, "verify", "gate", "make", "run")
-	if err := os.WriteFile(filepath.Join(dir, "notes.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := discoverTools(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"gate", "run", "verify"}
-	if len(got) != len(want) {
-		t.Fatalf("discoverTools = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("discoverTools = %v, want %v", got, want)
-		}
-	}
-}
-
-func TestDiscoverToolsReportsAMissingDirectory(t *testing.T) {
-	if _, err := discoverTools(filepath.Join(t.TempDir(), "absent")); err == nil {
-		t.Error("a missing cmd directory was accepted")
-	}
-}
-
 func TestFileHash(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "a")

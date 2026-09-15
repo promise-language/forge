@@ -16,7 +16,7 @@ var (
 const usage = `setup — configure git hooks.
 
 Usage:
-  setup [-h | -help]
+  setup [-help]
 
 Sets git's core.hooksPath to .githooks so the repo's pre-commit gate runs.
 Idempotent; ./make also runs this on every invocation.`

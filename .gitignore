@@ -3,10 +3,10 @@
 *.swo
 
 # Build outputs from `go build` / `go run` in this repo
-bin/
-/.flow/
-/.workspace/
-/.mcp.json
 /.claude/settings.local.json
+/.flow/
+/.home/
+/.mcp.json
+/.workspace/
+/bin/
 /CLAUDE.local.md
-/make.local

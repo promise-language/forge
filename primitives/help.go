@@ -5,12 +5,16 @@ import (
 	"os"
 )
 
-// HasHelpFlag reports whether args request usage. It accepts both flag prefixes
-// (-help and --help) and the short form (-h / --h), normalizing long to short
-// via NormalizeArgs first.
+// HasHelpFlag reports whether args request usage.
+//
+// The name is -help and only -help. Both prefixes are the same flag, so
+// --help and -help both match after NormalizeArgs; -h and --h do not, because
+// an abbreviation is not a flag at all but unknown input (cli-guide §3, §8).
+// One name per flag means the spelling help text, error messages and docs use
+// is the single spelling that works.
 func HasHelpFlag(args []string) bool {
 	for _, a := range NormalizeArgs(args) {
-		if a == "-h" || a == "-help" {
+		if a == "-help" {
 			return true
 		}
 	}

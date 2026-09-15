@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/promise-language/forge/primitives"
@@ -22,7 +21,7 @@ import (
 const usage = `make — the meta-builder.
 
 Usage:
-  ./make [-force | --force] [-h | -help]
+  ./make [-force] [-help]
 
 Compiles every tool under tools/build/cmd into bin/ (stamping each with the
 tools-source hash and repo root) and wires git hooks. Skips the build when
@@ -55,7 +54,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: could not configure git hooks: %v\n", err)
 	}
 
-	tools, err := discoverTools(filepath.Join(repoRoot, "tools", "build", "cmd"))
+	// What this project builds, from the one function that answers that —
+	// the same one `bin/run --list` reports from, so the binaries this writes
+	// into bin/ and the commands the project claims cannot drift apart.
+	tools, err := common.CommandNames(repoRoot)
 	must(err)
 
 	binDir := filepath.Join(repoRoot, "bin")
@@ -102,28 +104,6 @@ func main() {
 	}
 	must(os.WriteFile(hashFile, []byte(sb.String()), 0o644))
 	fmt.Printf("built %d tool(s) into bin/\n", len(tools))
-}
-
-// discoverTools is the tool set: one tool per directory under
-// tools/build/cmd, except make itself, which runs from source and is never
-// compiled into bin/. The listing IS the registry — there is no list anywhere
-// to keep in step with it, so adding a tool is adding a directory and retiring
-// one is deleting it (#199 retired `guard` that way).
-//
-// A file under cmd/ is not a tool: `go build ./cmd/<name>` wants a package.
-func discoverTools(cmdDir string) ([]string, error) {
-	entries, err := os.ReadDir(cmdDir)
-	if err != nil {
-		return nil, err
-	}
-	var tools []string
-	for _, e := range entries {
-		if e.IsDir() && e.Name() != "make" {
-			tools = append(tools, e.Name())
-		}
-	}
-	sort.Strings(tools)
-	return tools, nil
 }
 
 func upToDate(hashFile, hash, binDir string, tools []string) bool {

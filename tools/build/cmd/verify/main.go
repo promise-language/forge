@@ -16,7 +16,7 @@ var (
 const usage = `verify — the commit gate.
 
 Usage:
-  verify [-h | -help]
+  verify [-help]
 
 Runs gofmt, go vet, go build, and go test over the module, printing a
 pass/FAIL summary. Exit 0 ("✅ OK to Commit") means safe to commit; non-zero
