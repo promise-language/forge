@@ -1,6 +1,9 @@
 # Command-line library
 
-The one implementation of [the CLI guide](../org/cli-guide.md) that every tool built from a
+> **Tag:** `command-line` — remaining work to complete this document: the query named in
+> [`docs/index.md`](index.md).
+
+The one implementation of [the CLI guide](org/cli-guide.md) that every tool built from a
 managed project's tools module is made from: what it models, what it makes true by construction,
 and what is still left to the author of a tool.
 
@@ -20,7 +23,7 @@ it.
 
 The guide is mechanical. Whether `--json` and `-json` are one flag, whether an unknown flag is
 refused, whether `-help` exits 0 — none of these is a place two projects could disagree and both
-be right, which is the test [`primitives.md`](../primitives.md) applies to everything that belongs
+be right, which is the test [`primitives.md`](primitives.md) applies to everything that belongs
 in the shared library.
 
 A parser written per tool disagrees with the guide in its own way, and the disagreements are the
@@ -364,7 +367,7 @@ project's `tested` gate rather than the first invocation that reaches it.
 ## Constraints on the library
 
 - **It imports nothing outside the standard library**, like the rest of
-  [`primitives`](../primitives.md). Terminal detection asks whether stdout is a character device,
+  [`primitives`](primitives.md). Terminal detection asks whether stdout is a character device,
   and needs no terminal package.
 - **It has no `init()` and no package-level mutable state.** Its streams, working directory and
   arguments are passed in, which is what lets every rule above be tested without a process.
@@ -400,11 +403,11 @@ every tool to support `-human`, and Help and version requires `-help` to print e
 Neither has room for a command whose stdout is an envelope or a verdict, nor for a subcommand set
 that is the project's gates rather than the tool's own vocabulary — which is why [Output](#output)
 refuses `-human` on two commands and [Help and version](#help-and-version) describes a computed set
-instead of listing it. **The recommendation is that the guide carve out both**, filed against
-`org`.
+instead of listing it. **The recommendation is that the guide carve out both**, and it is
+[org#19](https://github.com/promise-language/org/issues/19).
 
 **Whether the guide's type list is closed.** Flag form names string, integer, boolean, duration,
 path and enumeration. [Types](#types) adds two list types and fixes the duration's grammar. **The
-recommendation is that the guide name the list types and adopt one duration grammar**, filed
-against `org`; a tool taking a list is otherwise written against this document rather than against
-the guide.
+recommendation is that the guide name the list types and adopt one duration grammar**, and it is
+[org#20](https://github.com/promise-language/org/issues/20); a tool taking a list is otherwise
+written against this document rather than against the guide.

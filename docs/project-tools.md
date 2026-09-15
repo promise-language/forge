@@ -1,5 +1,8 @@
 # Project tools
 
+> **Tag:** `project-tools` — remaining work to complete this document: the query named in
+> [`docs/index.md`](index.md).
+
 The one implementation of `make`, `setup`, `verify`, `gate` and `run` that every managed project
 builds its tools from. A project shapes that implementation with a definition written in Go, and
 with nothing else. The standard definition measures and repairs Go and Promise projects without a
@@ -34,7 +37,7 @@ project may change.
 > - the staleness check;
 > - the confinement of what a tool writes.
 
-The open question in [`primitives.md`](../primitives.md) was whether this machinery could be held
+The open question in [`primitives.md`](primitives.md) was whether this machinery could be held
 in common while the terms it judges by could not. It can. The membership test that document states
 answers it:
 
@@ -288,7 +291,7 @@ condition rather than by unit.
 ## Make
 
 `make` runs from source through the committed trampoline and needs nothing pre-built
-([blueprint.md](../blueprint.md), The bootstrap entry point). In order:
+([blueprint.md](blueprint.md), The bootstrap entry point). In order:
 
 1. **Resolve the root.** The trampoline pins the working directory to `<root>/tools/build`. `make`
    refuses unless `<root>/tools/build/cmd/make/main.go` exists there.
@@ -626,9 +629,9 @@ a change to the library is measured by this repository's own gates before any pr
 
 ## What ratification amends
 
-- **[primitives.md](../primitives.md)**, What belongs here and its open question. The harness is the
+- **[primitives.md](primitives.md)**, What belongs here and its open question. The harness is the
   library's. What stays with the project is the definition and the terms.
-- **[blueprint.md](../blueprint.md):**
+- **[blueprint.md](blueprint.md):**
   - What the model gives you — the hash's algorithm, the one-per-line listing, and the two stamped
     variables.
   - Repository layout, Shared common library and Step-by-step implementation guide — the definition
