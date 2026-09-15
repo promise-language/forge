@@ -43,3 +43,10 @@ their tags is its own compliance gaps.
   surface.
 - [org/stamp.json](org/stamp.json) — The version stamp: the org release these copies came from,
   with per-file hashes.
+
+## Proposals — not binding
+
+- [proposals/command-line.md](proposals/command-line.md) — The one implementation of the CLI
+  guide that every project tool is built from.
+- [proposals/project-tools.md](proposals/project-tools.md) — The one `make`, `setup`, `verify`,
+  `gate` and `run`, and the definition in Go a project shapes them with.
