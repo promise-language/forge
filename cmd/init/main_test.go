@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -666,6 +668,139 @@ func TestScaffoldedHookIsTheHookThisRepositoryRuns(t *testing.T) {
 	if own != preCommitHook {
 		t.Errorf("this repository's .githooks/pre-commit and the emitted one differ:\n--- own ---\n%s\n--- emitted ---\n%s", own, preCommitHook)
 	}
+}
+
+// The wiring cmd/init commits into a target repository has one home, and it is
+// the constant that emits it (docs/blueprint.md, The agent guard): "The file's
+// text is the settingsJSON constant in cmd/init/main.go, which is what writes
+// it; this document does not carry a second copy of it", because "a prose copy
+// of the wiring is the first place the two spellings part company". The two
+// tests above fix what the constants say; this one fixes that they are the only
+// place saying it.
+//
+// A pasted copy reads as documentation right up to the day the two spellings
+// differ, and then it is the copy a reader believes — so nothing announces the
+// drift, which is why the constraint needs a test rather than review. The
+// trampolines are deliberately not in this set: docs/blueprint.md, The bootstrap
+// entry point quotes ./make in full on purpose, and it is the wiring for the
+// tools the project does not build that is stated once.
+func TestNoDocumentCarriesASecondCopyOfTheEmittedWiring(t *testing.T) {
+	wiring := emittedWiring()
+	if len(wiring) == 0 {
+		t.Fatal("no wiring was extracted — the constraint was not checked")
+	}
+	found, scanned, err := documentsCarrying(filepath.Join("..", ".."), wiring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A walk that read nothing would pass silently, which reads as coverage of
+	// a constraint nothing was checked against.
+	if scanned == 0 {
+		t.Fatal("no document was read — the constraint was not checked")
+	}
+	for _, f := range found {
+		t.Errorf("%s — the wiring is stated once, in the constant cmd/init emits it from", f)
+	}
+}
+
+// The walk itself, over a tree that breaks the constraint: without this the test
+// above passes whether or not it can see a pasted copy at all.
+func TestDocumentsCarryingReportsAPastedCopy(t *testing.T) {
+	wiring := emittedWiring()
+	if len(wiring) == 0 {
+		t.Fatal("no wiring was extracted")
+	}
+	tree := t.TempDir()
+	// Re-indented and fenced, which is how a document would carry it — the copy
+	// a reader has to notice is never a byte-identical file.
+	write(t, tree, "docs/guide.md", "Wired like this:\n\n```json\n        "+wiring[0]+"\n```\n")
+	write(t, tree, "docs/prose.md", "The guard runs on both tool-use events, and its command strings are exact.\n")
+	// Not read: the vendored corpus is byte-identical to its home and is not
+	// this repository's to repair (org/normative.md, Location), and nothing a
+	// repository publishes lives under a dot directory.
+	write(t, tree, "docs/org/cli-guide.md", wiring[0]+"\n")
+	write(t, tree, ".flow/notes.md", wiring[0]+"\n")
+
+	found, scanned, err := documentsCarrying(tree, wiring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned != 2 {
+		t.Errorf("read %d documents, want the 2 outside the corpus and the dot directory", scanned)
+	}
+	if len(found) != 1 {
+		t.Fatalf("reported %d copies, want the one in docs/guide.md: %v", len(found), found)
+	}
+	if !strings.Contains(found[0], "docs/guide.md") || !strings.Contains(found[0], wiring[0]) {
+		t.Errorf("the report names neither the document nor the line: %q", found[0])
+	}
+}
+
+// emittedWiring returns the lines of the wiring cmd/init commits into a target
+// repository — the files naming a tool ./make never builds
+// (docs/blueprint.md, Tools the project does not build). It reads them off
+// files(), so a wiring file that stops being emitted stops being checked with
+// no edit here.
+//
+// Shell comments and lines under ten characters are left out. Neither is a
+// spelling a document could copy and get wrong: the comments are prose a
+// document may legitimately echo, and the short lines are the punctuation that
+// closes a block — `}`, `fi` — which carries no wiring at all.
+func emittedWiring() []string {
+	var lines []string
+	seen := map[string]bool{}
+	for _, f := range files() {
+		if !strings.HasPrefix(f.path, ".githooks/") && !strings.HasPrefix(f.path, ".claude/") {
+			continue
+		}
+		for _, line := range strings.Split(substituteBackticks(f.body), "\n") {
+			line = strings.TrimSpace(line)
+			if len(line) < 10 || strings.HasPrefix(line, "#") || seen[line] {
+				continue
+			}
+			seen[line] = true
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// documentsCarrying walks root for Markdown and reports every document carrying
+// one of lines verbatim. Comparison is against the trimmed line, so re-indenting
+// a pasted block does not hide it. scanned is how many documents were read, so a
+// walk that reached none cannot pass as a walk that found none.
+func documentsCarrying(root string, lines []string) (found []string, scanned int, err error) {
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel != "." && (strings.HasPrefix(d.Name(), ".") || d.Name() == "bin" || rel == "docs/org") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(p) != ".md" {
+			return nil
+		}
+		b, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		scanned++
+		for _, line := range lines {
+			if strings.Contains(string(b), line) {
+				found = append(found, fmt.Sprintf("%s carries the wiring verbatim: %q", rel, line))
+			}
+		}
+		return nil
+	})
+	return found, scanned, err
 }
 
 // The two commands are compared byte-for-byte by a conformance checker, so any

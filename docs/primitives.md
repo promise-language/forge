@@ -9,7 +9,8 @@ change cannot break its build.
 
 **Out of scope:** which tools a project must have and who builds them — that is workspace's
 `tool-contract.md`, Required tools, and this document states no requirement it already carries.
-What the tools *do* once built is [`blueprint.md`](blueprint.md).
+What the tools *do* once built is [`project-tools.md`](project-tools.md), and why the tooling is
+shaped this way at all is [`blueprint.md`](blueprint.md).
 
 ---
 
@@ -48,14 +49,18 @@ executable suffix is `.exe` has one correct answer. None of these is a place a p
 standing to differ, so a project holding its own is holding a latent disagreement with every
 other.
 
-What fails the test — and therefore stays in each project's own `tools/build/common`:
+What fails the test — and therefore stays with the project, in the definition it writes
+([`project-tools.md`](project-tools.md), [The definition](project-tools.md#the-definition)):
 
-- **The verify pipeline.** Only the project knows how it builds and tests itself. One project
-  must build a frontend before its Go package will compile; another takes a host-wide lock;
-  another tallies every failure rather than stopping at the first. A caller requires `verify` to
-  pass and has no opinion on what it does to get there.
+- **What the verify pipeline runs, and in what order.** Only the project knows how it builds and
+  tests itself. One project must build a frontend before its Go package will compile; another
+  widens the lock its runs contend on; another tallies every failure rather than stopping at the
+  first. A caller requires `verify` to pass and has no opinion on what it does to get there. What
+  *runs* those steps — the stages, the summary, the record — has one right answer and is the
+  library's.
 - **The gate set and the judging terms.** Which gates a project answers, and the thresholds a
-  verdict rests on, are the project's own — reviewed in the tree with the code they judge.
+  verdict rests on, are the project's own — reviewed in the tree with the code they judge. How a
+  gate reports and how a judge compares are not.
 - **Anything naming one project.** A toolchain detection, a generated-file check, a
   project-specific measurement.
 
