@@ -32,7 +32,7 @@ func RunVerify(repoRoot string, args []string) error {
 	// A stale blessing left behind is the one outcome the verified-tree check
 	// must never produce, so failing to clear fails the run outright.
 	if err := clearVerifiedTree(repoRoot); err != nil {
-		return fmt.Errorf("clearing %s: %w", verifiedTreeRecord, err)
+		return fmt.Errorf("clearing %s: %w", primitives.VerifiedTreeRecord, err)
 	}
 	return runVerifySteps(repoRoot, verifyPipeline(repoRoot))
 }

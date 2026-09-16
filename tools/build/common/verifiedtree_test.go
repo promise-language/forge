@@ -3,6 +3,7 @@ package common
 import (
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,6 +38,15 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
+// ignoreRecordDir is the .gitignore line that keeps the record out of the tree
+// verify blesses. It is derived from the one constant rather than typed, so a
+// fixture cannot come to name a directory the code under test does not write
+// to — which would make every ignore-rule test assert about the wrong path and
+// still pass.
+func ignoreRecordDir() string {
+	return path.Dir(primitives.VerifiedTreeRecord) + "/\n"
+}
+
 // verifyRepoForTest is a fresh checkout with an identity and the .gitignore
 // every project is required to carry for .workspace/ (tool-contract's Layout).
 func verifyRepoForTest(t *testing.T) string {
@@ -45,13 +55,13 @@ func verifyRepoForTest(t *testing.T) string {
 	git(t, dir, "init", "-q", "-b", "main")
 	git(t, dir, "config", "user.email", "t@example.com")
 	git(t, dir, "config", "user.name", "T")
-	writeFile(t, filepath.Join(dir, ".gitignore"), ".workspace/\n")
+	writeFile(t, filepath.Join(dir, ".gitignore"), ignoreRecordDir())
 	return dir
 }
 
 func recordedTree(t *testing.T, dir string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, ".workspace", "verified-tree"))
+	data, err := os.ReadFile(recordPath(dir))
 	if err != nil {
 		t.Fatalf("read the record: %v", err)
 	}
@@ -98,7 +108,7 @@ func TestRecordRespectsIgnoreRules(t *testing.T) {
 	// An ignored file stays out; a tracked-but-ignored file stays in — the
 	// reason the temp index is seeded rather than left empty.
 	dir := verifyRepoForTest(t)
-	writeFile(t, filepath.Join(dir, ".gitignore"), ".workspace/\nignored.txt\npinned.txt\n")
+	writeFile(t, filepath.Join(dir, ".gitignore"), ignoreRecordDir()+"ignored.txt\npinned.txt\n")
 	writeFile(t, filepath.Join(dir, "pinned.txt"), "pinned\n")
 	git(t, dir, "add", "-A")
 	git(t, dir, "add", "-f", "pinned.txt")
@@ -125,7 +135,7 @@ func TestRecordTrackedSetFollowsIndexNotHEAD(t *testing.T) {
 	// record is a tree no `git add -A` can stage — a permanent guard refusal
 	// whose named recovery, re-running verify, reproduces it.
 	dir := verifyRepoForTest(t)
-	writeFile(t, filepath.Join(dir, ".gitignore"), ".workspace/\nadded.txt\ndropped.txt\n")
+	writeFile(t, filepath.Join(dir, ".gitignore"), ignoreRecordDir()+"added.txt\ndropped.txt\n")
 	writeFile(t, filepath.Join(dir, "dropped.txt"), "dropped\n")
 	git(t, dir, "add", "-A")
 	git(t, dir, "add", "-f", "dropped.txt")
@@ -183,7 +193,7 @@ func TestRecordIsOneTreeIdNewlineTerminated(t *testing.T) {
 	if err := recordVerifiedTree(dir); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(verifiedTreeRecord)))
+	raw, err := os.ReadFile(recordPath(dir))
 	if err != nil {
 		t.Fatalf("read the record: %v", err)
 	}
@@ -203,7 +213,7 @@ func TestRecordIsOneTreeIdNewlineTerminated(t *testing.T) {
 
 func TestClearVerifiedTree(t *testing.T) {
 	dir := t.TempDir()
-	record := filepath.Join(dir, ".workspace", "verified-tree")
+	record := recordPath(dir)
 	writeFile(t, record, "abc\n")
 	if err := clearVerifiedTree(dir); err != nil {
 		t.Fatalf("clearing an existing record: %v", err)
@@ -221,7 +231,7 @@ func TestRecordOutsideGitCheckout(t *testing.T) {
 	if err := recordVerifiedTree(dir); err != nil {
 		t.Fatalf("outside a checkout recording should be a no-op, not an error: %v", err)
 	}
-	if primitives.Exists(filepath.Join(dir, ".workspace", "verified-tree")) {
+	if primitives.Exists(recordPath(dir)) {
 		t.Error("no record should be written outside a git checkout")
 	}
 }
@@ -260,7 +270,7 @@ func TestRunVerifyStubClearsAndRecords(t *testing.T) {
 	// cleared at the start and a fresh tree id is recorded at the end.
 	dir := verifyRepoForTest(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
-	writeFile(t, filepath.Join(dir, ".workspace", "verified-tree"), "stale-garbage\n")
+	writeFile(t, recordPath(dir), "stale-garbage\n")
 	if err := RunVerify(dir, nil); err != nil {
 		t.Fatalf("RunVerify: %v", err)
 	}
@@ -284,11 +294,11 @@ func TestRunVerifyRedRunLeavesNothingBlessed(t *testing.T) {
 	dir := verifyRepoForTest(t)
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.test\n")
 	writeFile(t, filepath.Join(dir, "broken.go"), "package broken\nfunc {\n")
-	writeFile(t, filepath.Join(dir, ".workspace", "verified-tree"), "stale-blessing\n")
+	writeFile(t, recordPath(dir), "stale-blessing\n")
 	if err := RunVerify(dir, nil); err == nil {
 		t.Fatal("verify over an unparseable Go file should fail")
 	}
-	if primitives.Exists(filepath.Join(dir, ".workspace", "verified-tree")) {
+	if primitives.Exists(recordPath(dir)) {
 		t.Error("a red run must leave nothing blessed — the stale record survived")
 	}
 }
@@ -304,17 +314,17 @@ func TestRunVerifyFailsWhenTheStaleRecordCannotBeCleared(t *testing.T) {
 	// A non-empty directory where the record belongs: os.Remove refuses it, the
 	// one clear failure that is neither "absent" nor a permission quirk of the
 	// machine the tests run on.
-	writeFile(t, filepath.Join(dir, filepath.FromSlash(verifiedTreeRecord), "occupied"), "x\n")
+	writeFile(t, filepath.Join(recordPath(dir), "occupied"), "x\n")
 
 	err := RunVerify(dir, nil)
 	if err == nil {
 		t.Fatal("RunVerify passed although the stale record could not be cleared")
 	}
-	if !strings.Contains(err.Error(), verifiedTreeRecord) {
-		t.Errorf("err = %v, want it to name %s", err, verifiedTreeRecord)
+	if !strings.Contains(err.Error(), primitives.VerifiedTreeRecord) {
+		t.Errorf("err = %v, want it to name %s", err, primitives.VerifiedTreeRecord)
 	}
 	// And it stopped there rather than running the pipeline over it.
-	if !primitives.Exists(filepath.Join(dir, filepath.FromSlash(verifiedTreeRecord), "occupied")) {
+	if !primitives.Exists(filepath.Join(recordPath(dir), "occupied")) {
 		t.Error("the run went on and disturbed what it could not clear")
 	}
 }
