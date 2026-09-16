@@ -80,7 +80,7 @@ func wantsList(args []string) bool {
 	return false
 }
 
-// renderList writes the answer in the mode stdout asked for (cli-guide §6).
+// renderList writes the answer in the mode stdout asked for (cli-guide's Output modes).
 //
 // The human form is one name per line with its kind, because the two lists are
 // answers to different questions — what this project builds, and what it
@@ -119,7 +119,7 @@ func main() {
 	// ParseRunArgs because that refuses an unknown flag rather than ignoring
 	// it, and --list is not a gate name.
 	if wantsList(args) {
-		// §8: every problem with the invocation is reported before anything is
+		// Fail closed: every problem with the invocation is reported before anything is
 		// done, and a malformed invocation exits 2 having written nothing.
 		rest, outFlags := common.TakeOutputFlags(args)
 		var bad []string

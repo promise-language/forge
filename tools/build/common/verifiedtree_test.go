@@ -38,7 +38,7 @@ func writeFile(t *testing.T, path, body string) {
 }
 
 // verifyRepoForTest is a fresh checkout with an identity and the .gitignore
-// every project is required to carry for .workspace/ (tool-contract §3).
+// every project is required to carry for .workspace/ (tool-contract's Layout).
 func verifyRepoForTest(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

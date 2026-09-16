@@ -7,7 +7,8 @@ package common
 // source under tools/build: the version is recorded in go.mod and go.sum, both
 // are hashed, so raising the pin changes the hash and every binary reports
 // itself stale until the next ./make. This repository is the other case
-// (docs/primitives.md §4, §6) — tools/build/go.mod replaces the dependency with
+// (docs/primitives.md, The staleness contract holds with nothing
+// added and This repository is its own first consumer) — tools/build/go.mod replaces the dependency with
 // a path into this working tree, because a library whose only consumer is a
 // published tag of itself is a library nothing tries before release. That tree
 // is tool source no go.sum describes, so the hash must cover it directly.

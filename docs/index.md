@@ -28,12 +28,20 @@ under-report and read as nearly done.
 - [project-tools.md](project-tools.md) — The one `make`, `setup`, `verify`, `gate` and `run`,
   and the definition in Go a project shapes them with.
 
-## Organization-wide corpus — binding
+## Organization wide corpus
 
-Vendored from [promise-language/org](https://github.com/promise-language/org) at the release
-named in [org/stamp.json](org/stamp.json). Never edited here: an issue about one of these
-documents is filed against `org` (org/normative.md §7); what this project files locally under
-their tags is its own compliance gaps.
+**Binding.** Every document under `org/` binds this project exactly as a specification in the root
+does. Vendored from [promise-language/org](https://github.com/promise-language/org) at the release
+named in [org/stamp.json](org/stamp.json).
+
+Never edited here: an issue about one of these documents is filed against `org`
+([org/normative.md#reconciliation](org/normative.md#reconciliation)); what this project files
+locally under their tags is its own compliance gaps.
+
+The corpus should be listed here once, as the directory, with
+[org/stamp.json](org/stamp.json) naming its members — `normative.md`, Location. It is listed
+per-file instead because `precommit-guard`'s docs-consistency check still requires that; see
+issue #14.
 
 - [org/normative.md](org/normative.md) — What makes a document binding, and the one docs
   structure every project holds.

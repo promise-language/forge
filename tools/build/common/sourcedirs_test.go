@@ -48,7 +48,8 @@ func edit(t *testing.T, repo, rel string) {
 }
 
 // Both trees are tool source here, and the replaced one is the whole reason
-// this file exists (docs/primitives.md §4, §6).
+// this file exists (docs/primitives.md, The staleness
+// contract holds with nothing added and This repository is its own first consumer).
 func TestSourceDirsNamesBothTrees(t *testing.T) {
 	got := sourceDirs()
 	for _, want := range []string{primitives.ToolsBuildDir, "primitives"} {

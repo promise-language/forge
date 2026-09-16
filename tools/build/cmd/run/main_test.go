@@ -20,7 +20,7 @@ func TestUsageNamesTheGatesAndTheVerdictMode(t *testing.T) {
 }
 
 // The discovery query arrives as `--list -json`, because the caller it exists
-// for is a program and §6 has programs ask for JSON. An earlier version
+// for is a program and Output modes has programs ask for JSON. An earlier version
 // accepted only a lone `--list` and refused that pair as an unknown flag, which
 // read to the workspace as "this project cannot say what it builds".
 func TestWantsListAcceptsTheFlagsItIsAskedWith(t *testing.T) {
@@ -34,7 +34,7 @@ func TestWantsListAcceptsTheFlagsItIsAskedWith(t *testing.T) {
 			t.Errorf("wantsList(%q) = false, want true", args)
 		}
 	}
-	// §3 sanctions no aliases, so a bare `list` is a gate name that does not
+	// Flag form sanctions no aliases, so a bare `list` is a gate name that does not
 	// exist rather than a second spelling of the flag.
 	for _, args := range [][]string{
 		{},

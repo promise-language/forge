@@ -2,13 +2,13 @@ package common
 
 import "testing"
 
-// §6: -json and -human force the mode, and passing both is a usage error rather
+// Output modes: -json and -human force the mode, and passing both is a usage error rather
 // than a precedence puzzle — the caller is told which two flags disagree, and
 // nothing is rendered.
 func TestModeRefusesBothFlagsByName(t *testing.T) {
 	_, err := OutputFlags{JSON: true, Human: true}.Mode()
 	if err == nil {
-		t.Fatal("-json -human was accepted; §6 makes it a usage error")
+		t.Fatal("-json -human was accepted; Output modes makes it a usage error")
 	}
 	for _, want := range []string{"-json", "-human"} {
 		if !contains(err.Error(), want) {
@@ -27,7 +27,7 @@ func TestModeHonoursEachFlag(t *testing.T) {
 }
 
 // Stripping is position-independent, so `run --list -json` and `run -json
-// --list` are one invocation rather than two spellings (§4).
+// --list` are one invocation rather than two spellings (One order).
 func TestTakeOutputFlagsStripsFromAnyPosition(t *testing.T) {
 	rest, of := TakeOutputFlags([]string{"-json", "-list"})
 	if !of.JSON || len(rest) != 1 || rest[0] != "-list" {

@@ -59,7 +59,7 @@ func TestSourceHashDefaultsToToolsBuild(t *testing.T) {
 	}
 }
 
-// The failure §4 exists to prevent: an edit to a replaced tree leaving every
+// The failure The staleness contract holds with nothing added exists to prevent: an edit to a replaced tree leaving every
 // binary claiming to be current.
 func TestSourceHashCoversEveryDirectoryNamed(t *testing.T) {
 	repo := hashFixture(t)

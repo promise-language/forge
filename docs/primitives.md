@@ -7,14 +7,13 @@ The shared library every managed project's dev tooling is built from: what belon
 does not, and how a project depends on it without giving up the guarantee that an upstream
 change cannot break its build.
 
-**Out of scope:** which tools a project must have and who builds them — that is the workspace's
-[`tool-contract.md`](https://github.com/promise-language/workspace/blob/main/docs/tool-contract.md)
-§2, and this document states no requirement it already carries. What the tools *do* once built
-is [`blueprint.md`](blueprint.md).
+**Out of scope:** which tools a project must have and who builds them — that is workspace's
+`tool-contract.md`, Required tools, and this document states no requirement it already carries.
+What the tools *do* once built is [`blueprint.md`](blueprint.md).
 
 ---
 
-## 1. One implementation, not one per project
+## One implementation
 
 > **A helper that every project's tooling needs exists once, here. A second copy of it is a
 > future disagreement.**
@@ -37,9 +36,9 @@ in four spellings, and the platform variant of it in one, so a post-build step r
 operating system and silently does not on the other.
 
 > **Identical copies are the failure, not the safeguard. What the copying protected is
-> protected instead by §3.**
+> protected instead by [the pin](#the-dependency-is-pinned).**
 
-## 2. What belongs here
+## What belongs here
 
 > **The membership test: could two projects disagree about this and both be right? If yes, it is
 > theirs. If no, it is this library's.**
@@ -67,7 +66,7 @@ workspace writes into — the value lives here and both ends import it. Prose at
 an agreement; it is two statements that happen to match today, and nothing fails when they stop
 matching.
 
-## 3. The dependency is pinned, per project
+## The dependency is pinned
 
 > **A project depends on this library at an exact version, recorded in its own
 > `tools/build/go.mod` and `go.sum`. An upstream change reaches a project when that project
@@ -86,7 +85,7 @@ and it is a change each project's own gates then measure before it lands.
 design: it holds the build toolchain's dependencies away from the product module, and that
 property is unchanged by there being exactly one entry in it.
 
-## 4. The staleness contract holds with nothing added
+## The staleness contract holds with nothing added
 
 > **The tools-source hash covers `go.mod` and `go.sum`. Raising the pinned version therefore
 > changes the hash, every compiled tool reports itself stale, and the next `./make` rebuilds.**
@@ -108,7 +107,7 @@ This is not a hypothetical accommodation. **This repository is that case**: forg
 built against forge's own working tree, because a library whose only consumer is a published tag
 of itself is a library nothing tries before release.
 
-## 5. Moving a helper here changes no call site
+## Moving a helper here changes no call site
 
 > **A helper published here keeps the name it had in the copies.**
 
@@ -118,10 +117,10 @@ the import arrives, and the package qualifier changes. A rename bundled into the
 a mechanical, reviewable change and a judgement call in the same diff, and the judgement call
 would be reviewed as though it were mechanical.
 
-Where a signature must grow — the hash gaining the replaced directories of §4 — it grows
+Where a signature must grow — the hash gaining the replaced directories of [the staleness contract](#the-staleness-contract-holds-with-nothing-added) — it grows
 variadically, so the call every project already writes keeps its meaning.
 
-## 6. This repository is its own first consumer
+## This repository is its own first consumer
 
 > **A change to what this repository prescribes is exercised by this repository's own tooling
 > before it is prescribed to anyone.**
@@ -135,14 +134,3 @@ does not pass here.
 It is also the reason `cmd/init` is held to the same standard. **The scaffolder emits a project
 that satisfies the tool contract**: the required tool set, and none of the tools a project may
 not build because the workspace is accountable for them.
-
-## Open questions
-
-**Whether the gate and run harness follows the helpers.** The measuring and judging entry points
-are project tools, and their machinery is substantially identical across projects while their
-terms are not. §2's test does not settle it on its own: the harness is the part with one right
-answer and the terms are the part with many, but they are currently one file. Whether the
-harness can be separated cleanly enough to hold in common — or whether the separation costs more
-clarity than the duplication does — decides whether a protocol conformance check is a backstop
-or the only thing standing between a project and gates nothing can ask for. The workspace's
-`conformance.md` carries the same question from the other side.

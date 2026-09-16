@@ -39,7 +39,7 @@ func TestStaleReason(t *testing.T) {
 }
 
 // A caller that names the replaced tree is told about an edit to it. This is
-// the staleness half of §4: the hash covering the tree is worth nothing unless
+// the staleness half of The staleness contract holds with nothing added: the hash covering the tree is worth nothing unless
 // the check asks for the same set.
 func TestStaleReasonSeesEveryDirectoryNamed(t *testing.T) {
 	repo := hashFixture(t)

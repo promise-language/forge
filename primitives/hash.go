@@ -24,7 +24,7 @@ const ToolsBuildDir = "tools/build"
 // that REPLACES the dependency with a local path names the replaced tree too:
 // its tool source is then outside anything go.sum describes, and hashing only
 // tools/build there would let an edit to the replaced tree leave every binary
-// claiming to be current (docs/primitives.md §4).
+// claiming to be current (docs/primitives.md, The staleness contract holds with nothing added).
 //
 // Each file is named by its path relative to repoRoot rather than to the
 // directory it was found under, so a file at the same offset inside two
@@ -84,7 +84,7 @@ func SourceHash(repoRoot string, dirs ...string) (string, error) {
 
 // ToolsSourceHash is SourceHash over the one directory a project that pins this
 // library has. It is the call every project already writes, and it keeps its
-// meaning (docs/primitives.md §5).
+// meaning (docs/primitives.md, Moving a helper here changes no call site).
 func ToolsSourceHash(repoRoot string) (string, error) {
 	return SourceHash(repoRoot)
 }

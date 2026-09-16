@@ -9,7 +9,8 @@ import (
 //
 // The name is -help and only -help. Both prefixes are the same flag, so
 // --help and -help both match after NormalizeArgs; -h and --h do not, because
-// an abbreviation is not a flag at all but unknown input (cli-guide §3, §8).
+// an abbreviation is not a flag at all but unknown input (cli-guide's Flag form
+// and Fail closed).
 // One name per flag means the spelling help text, error messages and docs use
 // is the single spelling that works.
 func HasHelpFlag(args []string) bool {

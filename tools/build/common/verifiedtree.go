@@ -1,12 +1,12 @@
 package common
 
 // This file is the writing end of the verified-tree contract
-// (workspace docs/tool-contract.md §8): bin/verify records the tree it blessed
+// (workspace's tool-contract.md, precommit-guard): bin/verify records the tree it blessed
 // at .workspace/verified-tree, and the workspace-delivered precommit-guard
 // refuses a commit whose staged tree differs.
 //
 // The reading end is not in this repository — the guard is a workspace tool,
-// built and owned there (§1), and this repo cannot import it. What the two
+// built and owned there (tool-contract's The two sets), and this repo cannot import it. What the two
 // ends share is the record's location and format, not code: one git tree
 // object id, newline terminated, at the path below. Spelling it wrong here is
 // a permanent, silent refusal — verify writes one path, the guard reads

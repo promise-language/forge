@@ -11,12 +11,11 @@ line of customization.
 **Out of scope:**
 
 - **Which tools a project must have, and who builds each one.** That is workspace's
-  [tool-contract.md](https://github.com/promise-language/workspace/blob/main/docs/tool-contract.md),
-  The two sets and Required tools.
+  `tool-contract.md`, The two sets and Required tools.
 - **The envelope, the manifest, and what a runner may conclude from a gate.** That is base's
-  [gate-contract.md](https://github.com/promise-language/base/blob/main/docs/gate-contract.md).
+  `gate-contract.md`.
 - **Which gates a flow asks for, and what a verdict must carry.** That is flow's
-  [gates-and-commands.md](https://github.com/promise-language/flow/blob/main/docs/gates-and-commands.md).
+  `gates-and-commands.md`.
 - **How any tool parses, reports and exits.** That is [command-line.md](command-line.md), which
   every tool here is built on.
 
@@ -164,9 +163,7 @@ machine but a toolchain and disk.** It carries both toolchains, the concepts flo
 `integration` composed of `formatted`, `builds`, `checked` and `tested`, `fit` divided into
 `fit:disk` and `fit:toolchain`, the standard [verify](#verify), and [setup](#setup)'s checks. A
 toolchain with no units in the repository contributes nothing. A project whose suites need a
-service adds `fit:services`, which is the seam
-[environment.md](https://github.com/promise-language/flow/blob/main/docs/environment.md) names for
-exactly that.
+service adds `fit:services`, which is the seam flow's `environment.md` names for exactly that.
 
 The definition admits four moves:
 
@@ -327,8 +324,7 @@ condition rather than by unit.
 11. **Write the sidecar, last:** the source hash, then each built name with its binary's SHA-256.
 
 **`make` reads no `make.local` and runs no hook of any other kind**
-([bootstrap.md](https://github.com/promise-language/workspace/blob/main/docs/bootstrap.md), Setup
-and make compose).
+(workspace's `bootstrap.md`, Setup and make compose).
 
 **Its result** in JSON is `{"up_to_date": bool, "built": [...], "removed": [...]}`. In human mode it
 is `Tools up to date`, or one line per tool built and removed. Progress goes to stderr.
@@ -385,8 +381,8 @@ commits, and a tool never writes scratch into a directory `git add -A` would sta
 > **A tool writes nothing outside its repository root.** Scratch goes under `.home/tmp/`, in a
 > directory unique to the run, removed when the run ends; what a toolchain computes from this
 > checkout goes under `.home/cache/`
-> ([tooling.md](https://github.com/promise-language/workspace/blob/main/docs/tooling.md), An agent
-> writes only where it is working, with the lifetimes in tool-contract.md's Layout).
+> (workspace's `tooling.md`, An agent writes only where it is working, with the lifetimes in
+> `tool-contract.md`'s Layout).
 
 - **Every child runs with its scratch and its cache pointed inside the checkout** — `TMPDIR`, `TMP`,
   `TEMP` and `GOTMPDIR` at the run's scratch directory, and each toolchain's cache variable at its
@@ -451,8 +447,7 @@ evidence to a reader that did not run it.
   declares of itself can grow additively. `run --list` keeps the names alone, which is the shape
   generic-projects.md's The contract fixes for it. The line form is for a person, and a program
   reads the JSON ([command-line.md#output](command-line.md#output)). This object is not base's
-  manifest, whose fields and rules are that document's; [Open questions](#open-questions) carries
-  the distance between them.
+  manifest, whose fields and rules are that document's.
 - **A composition measures each part by the path a caller asking for that part alone would take.**
   The whole cannot disagree with its parts about how anything is measured.
   - Its metrics are its parts' metrics, and its groups are its parts' groups.
@@ -634,9 +629,9 @@ a change to the library is measured by this repository's own gates before any pr
 - **[blueprint.md](blueprint.md):**
   - What the model gives you — the hash's algorithm, the one-per-line listing, and the two stamped
     variables.
-  - Repository layout, Shared common library and Step-by-step implementation guide — the definition
+  - Repository layout, Shared common library and Step by step implementation guide — the definition
     replaces the pipeline code held in `common/`.
-  - The meta-builder and The staleness self-check — the derived source set, the single stamp,
+  - The meta builder and The staleness self check — the derived source set, the single stamp,
     `-rebuild`, pruning, and the refusal.
   - The commit gate — stages, the repair, the ratchet, the lock's location.
   - Tools the project does not build, The commit gate hook and The agent guard — the committed
@@ -645,40 +640,3 @@ a change to the library is measured by this repository's own gates before any pr
   - Cache isolation — the cache moves under `.home/cache/`.
   - What this model deliberately avoids, on frameworks — the harness is deliberately one.
   - Reference — the reference is the library, not the scaffolder's constants.
-
-## Open questions
-
-**Whether the gate listing in JSON grows into base's manifest.** Reactor's
-[base-engineering.md](https://github.com/promise-language/reactor/blob/main/docs/base-engineering.md)
-has the project print a manifest carrying each gate's timeout, the transitions it blocks, its
-schedule, its eligibility and its metrics' modes and caps, and base refuses a manifest whose gate
-declares none of them. The objects [gate](#gate) describes carry a gate's name, summary and metrics,
-and can gain the rest additively. **The recommendation is to grow them once base's manifest settles**,
-with caps and directions read from `tools/gates/` so the terms keep one home.
-
-**What a runner reports when a tool refuses.** base's five outcomes are `measured`, `timed out`,
-`could not start`, `died` and `broke the contract`. A gate that refused because its build is stale
-fits none: it started, it printed no envelope, and the defect is neither the host's nor the gate's
-code. [Staleness](#staleness) keeps the refusal off the protocol streams so that no runner reads it
-as a contract breach, which leaves it reported as `died` and retried. **The recommendation is that
-base admit a refusal among the outcomes**, and the same for a gate that ran and could not obtain a
-measurement.
-
-**Where a host-scoped lock may live.** A project whose `verify` serializes across a machine needs a
-lock outside any one checkout, and tooling.md confines a tool's writes to its repository root. **The
-recommendation is that workspace state which wins**, since one of the two documents has to.
-
-**The path rule and the ratchet.** Workspace's conformance graduation refuses a commit that touches
-both `tools/gates/` and the code under measurement. A ratchet is moved by the change that earned it
-([the terms](#the-terms)), so that rule as written refuses every improvement. **The recommendation is
-to narrow it to `thresholds.json`.**
-
-**Reactor's dev-tooling direction.** Reactor's
-[dev-tooling.md](https://github.com/promise-language/reactor/blob/main/docs/dev-tooling.md) has BASE
-projects run their tools from source with `promise run`, and treats the Go blueprint as prior art
-rather than as one implementation of a shared surface. [One implementation](#one-implementation)
-requires the two to be interchangeable. **The recommendation is that reactor's document cite the
-shared surface**, so that what differs between them is delivery.
-
-The two open questions about the invocation surface itself — the colon in a gate name, and the
-refusal status — are [command-line.md](command-line.md)'s.

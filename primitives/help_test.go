@@ -13,7 +13,8 @@ func TestHasHelpFlag(t *testing.T) {
 		}
 	}
 	// An abbreviation is not a flag at all — it is unknown input, and the tool
-	// that receives it says so rather than guessing at help (cli-guide §3, §8).
+	// that receives it says so rather than guessing at help (cli-guide's Flag form
+	// and Fail closed).
 	notHelp := [][]string{
 		nil, {}, {"-force"}, {"--force"}, {"-helper"}, {"--helpme"}, {"help"},
 		{"-h"}, {"--h"}, {"-force", "-h"},

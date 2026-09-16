@@ -2,7 +2,7 @@
 // project's dev tooling is built from. A project imports it at a pinned version
 // rather than holding a copy: identical copies are one implementation with as
 // many chances to drift as there are projects, and no project has ever exercised
-// the ownership the copying bought (docs/primitives.md §1, §3).
+// the ownership the copying bought (docs/primitives.md, One implementation and The dependency is pinned).
 //
 // What lives here:
 //
@@ -20,7 +20,7 @@
 //
 // The membership test is whether two projects could disagree about a thing and
 // both be right. A hash function has one correct answer; so does a staleness
-// check, and so does whether the executable suffix is ".exe" (§2). What fails
+// check, and so does whether the executable suffix is ".exe" (What belongs here). What fails
 // that test stays in each project's own tools/build/common: the verify pipeline,
 // the gate set, the judging terms, anything naming one project.
 //
@@ -37,7 +37,8 @@
 // The copies were byte-identical, so their exported names are already agreed
 // fleet-wide. Adopting this library is therefore a deletion and an import: the
 // file goes, the import arrives, and the package qualifier changes. Where a
-// signature must grow — the hash gaining the replaced directories of §4 — it
+// signature must grow — the hash gaining the replaced directories of The
+// staleness contract holds with nothing added — it
 // grows variadically, so the call every project already writes keeps its
-// meaning (§5).
+// meaning (Moving a helper here changes no call site).
 package primitives

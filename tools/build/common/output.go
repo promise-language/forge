@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-// Two output modes, one rule (docs/org/cli-guide.md §6).
+// Two output modes, one rule (docs/org/cli-guide.md, Output modes).
 //
 // The mode is decided by stdout ALONE — never stderr, never an environment
 // variable. An environment variable is a mode a caller did not type and cannot
@@ -56,7 +56,7 @@ func TakeOutputFlags(args []string) ([]string, OutputFlags) {
 }
 
 // Mode resolves the flags against the default. Passing both is a contradiction
-// rather than a precedence puzzle, so it is the usage error §8 makes it —
+// rather than a precedence puzzle, so it is the usage error Fail closed makes it —
 // named, and before anything is done.
 //
 // The default asks stdout whether it is a character device: a terminal is, and

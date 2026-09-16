@@ -12,26 +12,26 @@ The pattern was distilled from a real compiler's dev tooling, where bash + Power
 ## What Forge ships
 
 - **This doc** (`docs/blueprint.md`) — the model and the rationale.
-- **`cmd/init`** — a scaffolder. Run it in a target repo and it lays down the file structure described in §2. After it exits, the target repo owns every line. Forge is *not* a runtime dependency at that point.
+- **`cmd/init`** — a scaffolder. Run it in a target repo and it lays down the file structure described in [Repository layout](#repository-layout). After it exits, the target repo owns every line. Forge is *not* a runtime dependency at that point.
 - **`primitives/`** — the shared library the tools are built from (FNV-128a hash, staleness check, OS detection, exec helpers, flag normalization, help handling, git-hook wiring). A project depends on it at a pinned version in its `tools/build/go.mod`; [`primitives.md`](primitives.md) states what belongs in it and why the pin is what makes that safe. Pipeline orchestration (`RunVerify`, the gate set, the judging terms) is project-specific by nature and stays in each adopter's own `tools/build/common/`.
 
 ---
 
-## 1. What the model gives you
+## What the model gives you
 
 - **One bootstrap command** (`./make`) on a fresh clone: compiles every tool, enables git hooks, and is idempotent on subsequent runs.
 - **Native binaries under `bin/`** — `bin/verify`, `bin/gate`, `bin/run`, `bin/setup`, and whatever else the project adds (`bin/build`, `bin/test`, `bin/format`, `bin/vet`, `bin/coverage`, `bin/stress`, `bin/prereqs`, …). Each is a Go binary, ~5–10 MB, fast to invoke.
 - **A commit gate** (`bin/verify`) that runs the full pre-commit pipeline. The only thing a contributor needs to know is "run `bin/verify` before committing."
 - **A self-staleness check**: every tool embeds the FNV-128a hash of the tool-source tree at compile time. If the source has changed since the binary was built, the tool prints `tools source has changed — run: ./make` and exits non-zero.
 - **A single, cross-platform implementation**: no bash/PowerShell drift. Tools detect host OS at runtime when behavior must differ.
-- **A measuring and a judging entry point** (`bin/gate`, `bin/run`). `bin/gate <name> --envelope` prints one envelope of measurements and nothing else; `bin/gate --list` names what the project answers; `bin/run <gate> --verdict` reads that envelope on stdin and writes one verdict. This is how anything outside the tree — a flow, a scheduler, a person — learns what this project can measure and whether a measurement is acceptable (§11, §12).
+- **A measuring and a judging entry point** (`bin/gate`, `bin/run`). `bin/gate <name> --envelope` prints one envelope of measurements and nothing else; `bin/gate --list` names what the project answers; `bin/run <gate> --verdict` reads that envelope on stdin and writes one verdict. This is how anything outside the tree — a flow, a scheduler, a person — learns what this project can measure and whether a measurement is acceptable ([the gate entry point](#the-gate-entry-point), [the judge and the terms](#the-judge-and-the-terms)).
 - **The judging terms as a separate artefact** (`tools/gates/`). `thresholds.json` holds the caps a verdict is reached against and `baselines.json` the ratcheted metrics; both are committed, reviewed with the code they judge, and read by the judge rather than compiled into it.
-- **Committed hooks that name tools the project does not build.** `.githooks/pre-commit` reaches `bin/precommit-guard` and `.claude/settings.json` wires `bin/tool-guard` — both delivered by the organization's workspace, not compiled by `./make` (§8, §9, §10).
+- **Committed hooks that name tools the project does not build.** `.githooks/pre-commit` reaches `bin/precommit-guard` and `.claude/settings.json` wires `bin/tool-guard` — both delivered by the organization's workspace, not compiled by `./make` ([tools the project does not build](#tools-the-project-does-not-build), [the commit gate hook](#the-commit-gate-hook), [the agent guard](#the-agent-guard)).
 - **Deterministic repo-root resolution.** `./make` computes the absolute repo root at bootstrap time and bakes it into every compiled tool via `-ldflags "-X main.repoRoot=<abs>"`. Each binary already knows where its repo lives — no runtime walk-up, no sentinel-file scan, no `os.Executable()` games. Robust to cwd changes, subdirectory invocations, agents that move around the filesystem, and binaries copied into other repos (they still point at their birth-repo). The only tool that resolves root at runtime is the meta-builder itself (it runs via `go run`, so ldflags don't apply), and the `./make` trampoline `cd`s it into a known path first.
 
 ---
 
-## 2. Repository layout
+## Repository layout
 
 ```
 <repo-root>/
@@ -39,17 +39,17 @@ The pattern was distilled from a real compiler's dev tooling, where bash + Power
 ├── make.cmd                   # Windows bootstrap trampoline
 ├── bin/                       # gitignored — built tools land here
 │   ├── verify, gate, run, setup
-│   ├── precommit-guard, tool-guard    # installed by the workspace, never built here (§8)
+│   ├── precommit-guard, tool-guard    # installed by the workspace, never built here (Tools the project does not build)
 │   └── .tools.hash            # sidecar — tools source hash, drives the up-to-date check
 ├── .workspace/                # gitignored — provisioning marker and the verified-tree record
 ├── .githooks/
-│   └── pre-commit             # trampoline that execs bin/precommit-guard (§9)
+│   └── pre-commit             # trampoline that execs bin/precommit-guard (The commit gate hook)
 ├── .claude/
-│   └── settings.json          # wires bin/tool-guard on PreToolUse and PostToolUse (§10)
+│   └── settings.json          # wires bin/tool-guard on PreToolUse and PostToolUse (The agent guard)
 ├── docs/
 │   └── index.md               # the map of docs/ — every document is listed here
 ├── tools/
-│   ├── gates/                 # the judging terms — committed, read by bin/run (§12)
+│   ├── gates/                 # the judging terms — committed, read by bin/run (The judge and the terms)
 │   │   ├── thresholds.json    # the caps a verdict is reached against
 │   │   └── baselines.json     # ratcheted metric values (machine-managed)
 │   └── build/                 # single Go module containing every tool
@@ -63,7 +63,7 @@ The pattern was distilled from a real compiler's dev tooling, where bash + Power
 │       │   ├── verify.go      # the verify pipeline
 │       │   ├── gate.go        # the gates: what this project measures, and how
 │       │   ├── run.go         # the judge: thresholds, the one comparison, the verdict
-│       │   ├── verifiedtree.go # the record verify writes for the commit gate (§7)
+│       │   ├── verifiedtree.go # the record verify writes for the commit gate (The commit gate)
 │       │   └── setup.go       # `git config core.hooksPath .githooks`
 │       └── cmd/               # one thin main.go per binary; discovered by ./make
 │           ├── make/main.go   # the meta-builder
@@ -91,7 +91,7 @@ Conventions that make this work:
 
 ---
 
-## 3. The bootstrap entry point
+## The bootstrap entry point
 
 `./make` is two lines:
 
@@ -113,7 +113,7 @@ These are the only platform-specific files in the whole tooling system. They exi
 
 ---
 
-## 4. The meta-builder (`tools/build/cmd/make/main.go`)
+## The meta builder
 
 Responsibilities, in order:
 
@@ -138,7 +138,7 @@ Key properties:
 
 ---
 
-## 5. The staleness self-check
+## The staleness self check
 
 In every tool's `main.go`:
 
@@ -191,7 +191,7 @@ This single check is what makes "edit a tool → re-run `./make`" the one-and-on
 
 ---
 
-## 6. Shared common library (`tools/build/common/`)
+## Shared common library
 
 Tools call each other via direct Go function calls, never subprocesses. `bin/verify` calls `common.RunBuild()` directly; it never `exec`s `bin/build`. This is fast, gives proper error propagation, and eliminates a class of "subprocess returned 1 but no usable output" bugs.
 
@@ -211,7 +211,7 @@ Essential common helpers to write first:
 | `Interrupted() bool` | True if Ctrl+C was received; checked between pipeline steps. |
 | `SetupLocalCache(repoRoot) error` | Set env vars so the project's tooling uses `<repoRoot>/.<project>-home/` instead of `~`. |
 
-These are [`primitives/`](../primitives/), imported rather than copied ([`primitives.md`](primitives.md) §1). Pipeline-orchestration helpers (`RunVerify`, `RunGate`, the judging terms) are project-specific and stay in each adopter's own `common/`.
+These are [`primitives/`](../primitives/), imported rather than copied ([`primitives.md`](primitives.md), [One implementation](primitives.md#one-implementation)). Pipeline-orchestration helpers (`RunVerify`, `RunGate`, the judging terms) are project-specific and stay in each adopter's own `common/`.
 
 Note: there is no `FindRoot()`. Each tool's `main.go` already has `repoRoot` as a package-level variable, populated by ldflags at build time. Common helpers that need it take it as a parameter.
 
@@ -229,7 +229,7 @@ func main() {
 
 ---
 
-## 7. The commit gate (`bin/verify`)
+## The commit gate
 
 The single command a contributor runs before committing. Before step one it **clears the verified-tree record**, so a run that dies part-way leaves nothing blessed and an in-flight verify blesses nothing. Then it bundles:
 
@@ -240,7 +240,7 @@ The single command a contributor runs before committing. Before step one it **cl
 5. **Test (optional alt targets)** — for example, a project that compiles to WASM might run an additional WASM test pass behind `--wasm`.
 6. **Summary block** — always printed, even on failure. Includes a per-target pass/FAIL line and elapsed time.
 7. **Failed-tests excerpt** — re-prints the `FAILED:` section so an agent tailing the last ~40 lines sees every failure.
-8. **Record** — write the id of the tree just blessed to `.workspace/verified-tree`. It runs last and only after every other step passed, so a red run blesses nothing. The reading end is the workspace's commit gate (`bin/precommit-guard`, §9), which refuses a commit whose staged tree differs from the recorded one: the exit status says the tree is sound, and the record says *which* tree that was.
+8. **Record** — write the id of the tree just blessed to `.workspace/verified-tree`. It runs last and only after every other step passed, so a red run blesses nothing. The reading end is the workspace's commit gate (`bin/precommit-guard`, [the commit gate hook](#the-commit-gate-hook)), which refuses a commit whose staged tree differs from the recorded one: the exit status says the tree is sound, and the record says *which* tree that was.
 
 Key design choices in `verify.go`:
 
@@ -253,27 +253,27 @@ Key design choices in `verify.go`:
 
 ---
 
-## 8. Tools the project does not build
+## Tools the project does not build
 
 Three of the binaries in `bin/` are not compiled by `./make` and their source is not in this tree: **`precommit-guard`**, **`tool-guard`** and **`issue`**. They are owned and delivered by a separate organization repository, arriving as a release artifact that `workspace setup` installs into `bin/` and `workspace update` refreshes. The project neither builds them, vendors them, nor keeps a variant of them under another name.
 
-The rule they come from is the workspace's [`tool-contract.md`](https://github.com/promise-language/workspace/blob/main/docs/tool-contract.md) §1, §2 and §5, and this document restates none of it. What matters here is the shape it leaves in the layout:
+The rule they come from is workspace's `tool-contract.md`, The two sets, Required tools and One name one builder, and this document restates none of it. What matters here is the shape it leaves in the layout:
 
 - **The meta-builder compiles what is under `tools/build/cmd/`, and that set contains no twin.** A project that built its own `guard` or `precommit` would hold a second copy of a policy the workspace is accountable for — and a second copy is where that policy can quietly be weaker, in exactly the repository nobody is looking at.
-- **What the project owns is the wiring, not the tool.** The committed `.githooks/pre-commit` (§9) and the committed `.claude/settings.json` (§10) *name* those binaries. Committing the wiring is what makes the gate live in a fresh clone, before `workspace setup` has ever run there — a hook that provisioning had to write would be absent exactly when it was most needed.
-- **A project that adopts no workspace still has a gate.** It is `bin/verify`, and §9 says how the hook says so.
+- **What the project owns is the wiring, not the tool.** The committed `.githooks/pre-commit` ([the commit gate hook](#the-commit-gate-hook)) and the committed `.claude/settings.json` ([the agent guard](#the-agent-guard)) *name* those binaries. Committing the wiring is what makes the gate live in a fresh clone, before `workspace setup` has ever run there — a hook that provisioning had to write would be absent exactly when it was most needed.
+- **A project that adopts no workspace still has a gate.** It is `bin/verify`, and [the commit gate hook](#the-commit-gate-hook) says how the hook says so.
 
 ---
 
-## 9. The commit gate hook (`bin/precommit-guard`)
+## The commit gate hook
 
 `.githooks/pre-commit` is a short shell trampoline that `exec`s `bin/precommit-guard`. The hooks dir is wired up by `bin/setup` (called from `./make`), so a fresh clone gets hooks on first `./make`.
 
-The hook is intentionally light, and that is a division of labour rather than a compromise: anything that requires running tests belongs in `bin/verify`, which the developer runs explicitly. Putting test execution in the hook makes commits slow and gets the hook disabled — which kills the whole gate. What the two ends share instead is the *record* `bin/verify` leaves (§7): the tree it blessed, which the commit gate compares against the tree being staged. What else that tool checks is its own document's to say, not this one's.
+The hook is intentionally light, and that is a division of labour rather than a compromise: anything that requires running tests belongs in `bin/verify`, which the developer runs explicitly. Putting test execution in the hook makes commits slow and gets the hook disabled — which kills the whole gate. What the two ends share instead is the *record* `bin/verify` leaves ([the commit gate](#the-commit-gate)): the tree it blessed, which the commit gate compares against the tree being staged. What else that tool checks is its own document's to say, not this one's.
 
 **A scaffolded project fails closed onto a workspace tool only where it has opted in. Opt-in is the provisioning marker `.workspace/project.json`. Absent the marker, the project's commit gate is `bin/verify`, run before committing, and the hook says so and gets out of the way.**
 
-This is the one judgement in this section, and it follows from [`tool-contract.md`](https://github.com/promise-language/workspace/blob/main/docs/tool-contract.md) §1: fail-closed is a consequence of having opted in, never a tax on a repository that did not. The workspace repository is private. An unconditional refusal would therefore block a public adopter's very first `git commit` on a recovery they cannot perform, and the only other way to unblock them — building a local twin — is what §5 forbids. Making the refusal conditional on the marker costs a provisioned checkout nothing: it has the marker, so it takes the refusing branch exactly as before.
+This is the one judgement in this section, and it follows from workspace's `tool-contract.md`, The two sets: fail-closed is a consequence of having opted in, never a tax on a repository that did not. The workspace repository is private. An unconditional refusal would therefore block a public adopter's very first `git commit` on a recovery they cannot perform, and the only other way to unblock them — building a local twin — is what One name one builder forbids. Making the refusal conditional on the marker costs a provisioned checkout nothing: it has the marker, so it takes the refusing branch exactly as before.
 
 One hook text, used by this repository and by everything it scaffolds:
 
@@ -297,7 +297,7 @@ A provisioned checkout takes branch 1, or branch 2 if the tool was removed. Only
 
 ---
 
-## 10. The agent guard (`bin/tool-guard`)
+## The agent guard
 
 `bin/tool-guard` is the harness-level guard for Claude Code, wired in the project's committed `.claude/settings.json` on **both** tool-use events:
 
@@ -334,7 +334,7 @@ A provisioned checkout takes branch 1, or branch 2 if the tool was removed. Only
 
 ---
 
-## 11. The gate entry point (`bin/gate`)
+## The gate entry point
 
 `bin/gate` is how anything outside the tree learns what this project can measure, and gets a measurement.
 
@@ -346,7 +346,7 @@ bin/gate --list                # the names this project answers, one per line
 Design rules:
 
 - **A gate measures and modifies nothing.** That is the whole difference between a gate and `bin/verify`, which formats the tree on its way to an answer: an answer about a tree that was repaired first is not an answer about the tree anyone proposed.
-- **A gate holds no threshold and reaches no verdict.** It reports what it found and stops. Whether `unformatted_files: 3` is acceptable is §12's question, and a gate that answered it would be the threshold sitting inside the party under measurement.
+- **A gate holds no threshold and reaches no verdict.** It reports what it found and stops. Whether `unformatted_files: 3` is acceptable is [the judge and the terms](#the-judge-and-the-terms)' question, and a gate that answered it would be the threshold sitting inside the party under measurement.
 - **Stdout carries the envelope and nothing else.** Every child process a gate spawns has its stdout captured; progress goes to stderr. The envelope is written whole, in one write, so a run killed part-way leaves output that does not parse — which is how a reader tells "measured nothing" from "measured and reported" without asking a process that is no longer alive to answer.
 - **The gate vocabulary is closed.** A name absent from the project's gate map is refused rather than guessed at: a runner asking for a gate this project does not have must learn that, not receive an empty measurement that reads like a clean result.
 - **`--list` is the only other thing that writes to stdout**, and it exists so that nothing outside the project has to hold a second copy of what the project can measure. Asking the entry point is the only way to learn it that cannot go stale.
@@ -354,7 +354,7 @@ Design rules:
 
 ---
 
-## 12. The judge (`bin/run`) and the terms (`tools/gates/`)
+## The judge and the terms
 
 `bin/run` is the judging layer, and it is a **different program from the gates on purpose**: a gate that held its own thresholds could be made to pass by editing the gate — and when the thing being measured is a change written by an agent, the agent can edit it. The party under judgement must not hold what judges it.
 
@@ -379,7 +379,7 @@ A genuine threshold or baseline change is a deliberate edit to a committed file,
 
 ---
 
-## 13. Cache isolation
+## Cache isolation
 
 Tools default to a repo-local home (`<root>/.<project>-home/`) instead of `~/.<project>`. Reasons:
 
@@ -393,7 +393,7 @@ The same env-var trick works for any toolchain (Cargo home, NPM cache, Bazel dis
 
 ---
 
-## 14. Step-by-step implementation guide
+## Step by step implementation guide
 
 The easiest path is `go run github.com/promise-language/forge/cmd/init@latest` in your target repo, which lays down the layout below. The steps are listed here so you know what `init` produces and so you can reproduce it by hand if you prefer.
 
@@ -401,17 +401,17 @@ The easiest path is `go run github.com/promise-language/forge/cmd/init@latest` i
 
 2. **Initialize `tools/build/` as a Go module.** `cd tools/build && go mod init <module-name>/tools/build`. Add it to `go.work` if the project already has one; otherwise just leave it as an island Go module.
 
-3. **Depend on `github.com/promise-language/forge/primitives`** at an exact version. It carries the load-bearing helpers — the hash, the staleness check, OS detection, exec, flag normalization, help — and a project writes none of them itself ([`primitives.md`](primitives.md) §1). There is no `common/root.go` — root is baked into each tool's `main` by the meta-builder. Helpers that need root take it as a `repoRoot string` parameter.
+3. **Depend on `github.com/promise-language/forge/primitives`** at an exact version. It carries the load-bearing helpers — the hash, the staleness check, OS detection, exec, flag normalization, help — and a project writes none of them itself ([`primitives.md`](primitives.md), [One implementation](primitives.md#one-implementation)). There is no `common/root.go` — root is baked into each tool's `main` by the meta-builder. Helpers that need root take it as a `repoRoot string` parameter.
 
 4. **Write `cmd/make/main.go`.** Just the meta-builder — discover `cmd/` subdirs, build each into `bin/`, write the hash sidecar, wire up git hooks via `RunSetup`.
 
-5. **Add `./make` and `make.cmd` at the repo root.** Two-line trampolines (see §3).
+5. **Add `./make` and `make.cmd` at the repo root.** Two-line trampolines (see [the bootstrap entry point](#the-bootstrap-entry-point)).
 
 6. **Gitignore `bin/`.** Add `bin/` to `.gitignore` so built tools are never committed.
 
 7. **Write `cmd/setup/main.go` and `common/setup.go`.** Configure `core.hooksPath` to `.githooks`.
 
-8. **Add `.githooks/pre-commit`** — the shell trampoline that execs `bin/precommit-guard`, the commit gate the workspace installs (§9). Take the text verbatim: it fails closed onto that tool where the checkout is provisioned, and names `bin/verify` where it is not.
+8. **Add `.githooks/pre-commit`** — the shell trampoline that execs `bin/precommit-guard`, the commit gate the workspace installs ([the commit gate hook](#the-commit-gate-hook)). Take the text verbatim: it fails closed onto that tool where the checkout is provisioned, and names `bin/verify` where it is not.
 
 9. **Write `cmd/build/main.go` + `common/build.go`.** Wraps your project's actual build command. Detect missing prereqs and print actionable hints rather than letting subprocess errors propagate raw.
 
@@ -419,11 +419,11 @@ The easiest path is `go run github.com/promise-language/forge/cmd/init@latest` i
 
 11. **Write `cmd/verify/main.go` + `common/verify.go`.** The orchestrator. Format → build → vet → test, with a summary block printed unconditionally and a global file lock.
 
-12. **Write `cmd/gate/main.go` + `common/gate.go`.** The measuring entry point (§11): a closed map of gate names, one measurement function each, `--envelope` on stdout and `--list` for discovery. Start with the four that make up `integration` — formatted, builds, checked, tested — and `fit`, which measures whether the machine is fit to be given work.
+12. **Write `cmd/gate/main.go` + `common/gate.go`.** The measuring entry point ([the gate entry point](#the-gate-entry-point)): a closed map of gate names, one measurement function each, `--envelope` on stdout and `--list` for discovery. Start with the four that make up `integration` — formatted, builds, checked, tested — and `fit`, which measures whether the machine is fit to be given work.
 
-13. **Write `cmd/run/main.go` + `common/run.go` + `tools/gates/thresholds.json`.** The judge (§12) and its terms: a cap for every metric a gate emits, one comparison serving both the by-hand path and `--verdict`. Add `tools/gates/baselines.json` — `{}` is a complete starting state, and tracking the file is what declares that the ratchet applies here.
+13. **Write `cmd/run/main.go` + `common/run.go` + `tools/gates/thresholds.json`.** The judge ([the judge and the terms](#the-judge-and-the-terms)) and its terms: a cap for every metric a gate emits, one comparison serving both the by-hand path and `--verdict`. Add `tools/gates/baselines.json` — `{}` is a complete starting state, and tracking the file is what declares that the ratchet applies here.
 
-14. **Wire `.claude/settings.json`** at `bin/tool-guard`, on both `PreToolUse` and `PostToolUse` (§10). Copy the command strings exactly; they are compared byte-for-byte.
+14. **Wire `.claude/settings.json`** at `bin/tool-guard`, on both `PreToolUse` and `PostToolUse` ([the agent guard](#the-agent-guard)). Copy the command strings exactly; they are compared byte-for-byte.
 
 15. **Document the workflow in `README.md` and `CLAUDE.md`.** Three lines:
 
@@ -437,7 +437,7 @@ The first 8 steps get you a working bootstrap; the remaining 7 get you the full 
 
 ---
 
-## 15. What this model deliberately avoids
+## What this model deliberately avoids
 
 - **No Makefiles.** Make's dependency model is excellent for actual compilation graphs and useless for "run this tool, then that tool, and print a summary." The Go pipeline is clearer and portable.
 - **No bash + PowerShell pair.** Every script duplicated across platforms diverges. One Go binary with `runtime.GOOS` checks is shorter than two scripts.
@@ -445,12 +445,12 @@ The first 8 steps get you a working bootstrap; the remaining 7 get you the full 
 - **No "framework". ** `common/` is a flat package of helpers, not an abstraction. Each tool's `cmd/<name>/main.go` calls the helpers directly.
 - **No silent failures.** Every error path returns a wrapped error with context. The verify summary always prints, even on failure, so an agent can grep the result without re-running.
 - **No tests-in-precommit-hook.** Tests run in `bin/verify` which the developer runs explicitly. The hook stays sub-second so it never gets disabled.
-- **No *unpinned* dependency on Forge.** The tools module depends on `primitives/` at an exact version recorded in its own `go.mod` and `go.sum`, so an upstream change reaches a project when that project raises the version and never before ([`primitives.md`](primitives.md) §3). What the project owns is the pipeline and the pin; what it does not own is a private copy of a helper with one right answer.
-- **No twin of a tool another party owns.** A project does not build its own copy of a tool the workspace is accountable for, under that name or any other (§8). A local copy is where the policy can quietly be weaker — the same disagreement the bullet above avoids, on the enforcement side rather than the helper side, and worse there because nothing downstream reads a guard's source to find out which version it was.
+- **No *unpinned* dependency on Forge.** The tools module depends on `primitives/` at an exact version recorded in its own `go.mod` and `go.sum`, so an upstream change reaches a project when that project raises the version and never before ([`primitives.md`](primitives.md), [The dependency is pinned](primitives.md#the-dependency-is-pinned)). What the project owns is the pipeline and the pin; what it does not own is a private copy of a helper with one right answer.
+- **No twin of a tool another party owns.** A project does not build its own copy of a tool the workspace is accountable for, under that name or any other ([tools the project does not build](#tools-the-project-does-not-build)). A local copy is where the policy can quietly be weaker — the same disagreement the bullet above avoids, on the enforcement side rather than the helper side, and worse there because nothing downstream reads a guard's source to find out which version it was.
 
 ---
 
-## 16. Reference — the runnable implementation
+## Reference
 
 This blueprint ships its own worked example: the [`cmd/init`](../cmd/init/main.go) scaffolder embeds every file described above as a string constant and writes a complete, runnable tooling tree into a target repo. Read the scaffolder to see the exact source the doc prescribes — it is the single source of truth, kept in lockstep with this document.
 
@@ -458,10 +458,10 @@ Where each piece lives in [`cmd/init/main.go`](../cmd/init/main.go):
 
 - Bootstrap: the `makeSh` / `makeCmd` constants (`./make`, `make.cmd`) and the `cmdMakeGo` constant (the meta-builder).
 - Common library: the `platformGo`, `execGo`, `argsGo`, `hashGo`, `staleGo`, `setupGo`, `verifyGo`, `gateGo`, `runGo` and `verifiedTreeGo` constants — written into `tools/build/common/`.
-- Staleness & root: `staleGo` + `hashGo`. There is no `root.go` — the root is baked into each binary via ldflags by the meta-builder (see §4–§5), so no runtime walk-up exists.
-- Verify pipeline: `verifyGo` (a language-detecting example pipeline; adopters replace `verifySteps` with their real commands), with `verifiedTreeGo` carrying the record it writes (§7).
-- Gates and the judge: `cmdGateGo` + `gateGo` (§11), `cmdRunGo` + `runGo` (§12), and the terms in the `thresholdsJSON` and `baselinesJSON` constants — written into `tools/gates/`.
-- Committed wiring for the tools the project does not build (§8): the `preCommitHook` trampoline naming `bin/precommit-guard` (§9), and the `settingsJSON` constant wiring `bin/tool-guard` on both events (§10).
+- Staleness & root: `staleGo` + `hashGo`. There is no `root.go` — the root is baked into each binary via ldflags by the meta-builder (see [the meta builder](#the-meta-builder) and [the staleness self check](#the-staleness-self-check)), so no runtime walk-up exists.
+- Verify pipeline: `verifyGo` (a language-detecting example pipeline; adopters replace `verifySteps` with their real commands), with `verifiedTreeGo` carrying the record it writes ([the commit gate](#the-commit-gate)).
+- Gates and the judge: `cmdGateGo` + `gateGo` ([the gate entry point](#the-gate-entry-point)), `cmdRunGo` + `runGo` ([the judge and the terms](#the-judge-and-the-terms)), and the terms in the `thresholdsJSON` and `baselinesJSON` constants — written into `tools/gates/`.
+- Committed wiring for the tools the project does not build ([tools the project does not build](#tools-the-project-does-not-build)): the `preCommitHook` trampoline naming `bin/precommit-guard` ([the commit gate hook](#the-commit-gate-hook)), and the `settingsJSON` constant wiring `bin/tool-guard` on both events ([the agent guard](#the-agent-guard)).
 - Agent-facing workflow doc: the `buildDocRaw` constant, appended to `CLAUDE.md` so the `./make` → `bin/verify` → `bin/run` loop is discoverable; and `docsIndexMd`, the map of `docs/`.
 
-The low-churn helpers are not among those constants: they are the importable [`primitives/`](../primitives/) package, which the scaffolded module depends on rather than reproduces ([`primitives.md`](primitives.md) §1).
+The low-churn helpers are not among those constants: they are the importable [`primitives/`](../primitives/) package, which the scaffolded module depends on rather than reproduces ([`primitives.md`](primitives.md), [One implementation](primitives.md#one-implementation)).

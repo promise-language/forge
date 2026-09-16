@@ -57,7 +57,7 @@ type Threshold struct {
 // ManifestFile is the thresholds manifest, versioned with the tree it judges.
 // A project with a judge must have one, and the path is fixed rather than
 // configurable: it is what lets something outside the project establish that
-// the terms are an artefact distinct from the judge (blueprint.md §12).
+// the terms are an artefact distinct from the judge (blueprint.md, The judge and the terms).
 const ManifestFile = "tools/gates/thresholds.json"
 
 // loadManifest reads the thresholds manifest from a repo root. An absent file

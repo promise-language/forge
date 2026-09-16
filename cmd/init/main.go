@@ -21,7 +21,7 @@
 //
 // It emits no twin of a tool the workspace is accountable for: precommit-guard
 // and tool-guard are named by the committed hooks and installed by `workspace
-// setup`, never built here (docs/blueprint.md §8).
+// setup`, never built here (docs/blueprint.md, Tools the project does not build).
 //
 // After init exits, the target repo owns every file. Forge is not a runtime
 // dependency unless the project explicitly imports primitives/.
@@ -355,10 +355,11 @@ under §tools/build/cmd/§ and re-running §./make§ — no registration step.
 // preCommitHook is the committed git hook, and it is the SAME TEXT this
 // repository runs at .githooks/pre-commit. One text, because a scaffolder whose
 // output differs from what its own author uses is prescribing something nobody
-// has tried (docs/primitives.md §6).
+// has tried (docs/primitives.md, This repository is its own first consumer).
 //
 // It names bin/precommit-guard, a workspace tool, and builds no local twin of it
-// (docs/blueprint.md §8). It fails closed onto that tool only where the checkout
+// (docs/blueprint.md, Tools the project does not build). It fails closed onto
+// that tool only where the checkout
 // opted in — the marker .workspace/project.json — because the workspace
 // repository is private, and an unconditional refusal would block a public
 // adopter's first commit on a recovery they cannot perform. Where there is no
@@ -508,7 +509,8 @@ func NormalizeArgs(args []string) []string {
 //
 // The name is -help and only -help. Both prefixes are the same flag, so
 // --help and -help both match after NormalizeArgs; -h and --h do not, because
-// an abbreviation is not a flag at all but unknown input (cli-guide §3, §8).
+// an abbreviation is not a flag at all but unknown input (cli-guide's Flag form
+// and Fail closed).
 func HasHelpFlag(args []string) bool {
 	for _, a := range NormalizeArgs(args) {
 		if a == "-help" {
@@ -2482,7 +2484,7 @@ index brought up to date afterwards is an index that was wrong in between.
 // ───────────────────────── claude config ─────────────────────────
 
 // settingsJSON wires bin/tool-guard, a workspace tool this project does not
-// build, on BOTH tool-use events (docs/blueprint.md §10). PreToolUse is the gate
+// build, on BOTH tool-use events (docs/blueprint.md, The agent guard). PreToolUse is the gate
 // and fails closed; PostToolUse observes and fails quiet, because by then the
 // tool has already run and an enforcing shape could only inject an error after a
 // completed call.

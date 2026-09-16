@@ -236,6 +236,10 @@ func TestSubstituteBackticks(t *testing.T) {
 // is followed by a digit, and a backtick opens code, so it is not. Every body
 // is checked, so the next constant authored with § inherits the check rather
 // than the defect.
+//
+// A section is addressed by its slug now and never by a number (org/normative.md,
+// Sections), so the section signs this still admits are the ones in the hook
+// wiring, which only a maintainer may move — see issue #14.
 func TestEmittedFilesUseTheSectionSignOnlyForBackticks(t *testing.T) {
 	for _, f := range files() {
 		for _, line := range strings.Split(f.body, "\n") {
@@ -656,7 +660,7 @@ func TestScaffoldedHookBranchesOnWhatTheCheckoutOptedInto(t *testing.T) {
 
 // One hook text, used by this repository and by everything it scaffolds. A
 // scaffolder whose output differs from what its own author runs is prescribing
-// something nobody has tried (docs/primitives.md §6).
+// something nobody has tried (docs/primitives.md, This repository is its own first consumer).
 func TestScaffoldedHookIsTheHookThisRepositoryRuns(t *testing.T) {
 	own := read(t, filepath.Join("..", "..", ".githooks", "pre-commit"))
 	if own != preCommitHook {

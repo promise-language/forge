@@ -6,7 +6,7 @@ package common
 // The meta-builder compiles one command per directory under tools/build/cmd,
 // so those directories already are the registry (cmd/make/main.go). A second
 // copy naming them here would be a list to keep in step with the first, and
-// the two would eventually disagree — the same argument docs/blueprint.md §11
+// the two would eventually disagree — the same argument docs/blueprint.md, The gate entry point,
 // makes for discovering gates rather than declaring them.
 //
 // `make` is not among them. It runs from source via the ./make trampoline and

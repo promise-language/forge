@@ -21,7 +21,7 @@ const selfModule = "github.com/promise-language/forge/primitives"
 // primitives, so anything primitives depends on is something every island tools
 // module drags in — including forge's own, which would then build against a
 // published version of the repository it is sitting inside (docs/primitives.md
-// §4, and doc.go). Prose at both ends is not an agreement; this is the only
+// The staleness contract holds with nothing added, and doc.go). Prose at both ends is not an agreement; this is the only
 // thing that fails when the constraint stops holding.
 //
 // Test files are exempt: their imports reach no consumer.

@@ -50,9 +50,10 @@ The root command is the binary. Every command has:
 **Children are a closed set, whether they are declared or computed.** A declared set is written in
 the tool's definition. A computed set is produced once per invocation from what the tool knows —
 the gates a project answers, the commands it builds — and then treated exactly like a declared
-one. A name outside it is unknown, which is the guide's Subcommands rule. Computing the set is
-what lets `gate` and `run` address a vocabulary that is the project's, without a second copy of
-that vocabulary anywhere.
+one. A name outside it is unknown, which is the guide's [subcommands](org/cli-guide.md#subcommands)
+rule. Computing the set is what lets `gate` and `run` address a vocabulary that is the project's,
+without a second copy of that vocabulary anywhere. Its members are compound names — `tested:root`
+is one name — so `bin/gate tested:root --envelope` is the command path complete, then the flag.
 
 **A command with children and no action requires a child.** Invoked without one, the invocation is
 malformed, and the tool answers with [the brief form](#help-and-version): what this binary is, the
@@ -73,8 +74,9 @@ printed by `verify`. A delegating child therefore declares no flags of its own, 
 
 What the check can decide, it decides:
 
-- **The alphabet** — lowercase ASCII letters, digits, and `-` as the only separator, from the
-  guide's Flag form.
+- **The alphabet** — lowercase ASCII letters, digits, and `-` as the only separator within a name,
+  from the guide's [flag form](org/cli-guide.md#flag-form); a subcommand name may additionally be
+  compound, two or more names joined by `:`, which is one name and not a prefix to search under.
 - **No alias.** The library has no way to give one flag a second name.
 - **No collision**, including a boolean's unused spelling (below).
 
@@ -108,19 +110,15 @@ value it was given, and the type it expected.
 | string | any text | `string` |
 | path | text, resolved against the directory the tool was invoked from | an absolute, cleaned path |
 | integer | a base-10 integer | `int64` |
-| duration | one positive integer followed by `s`, `m` or `h` | `time.Duration` |
+| duration | one positive integer and one unit — `ms`, `s`, `m`, `h`, `d` | `time.Duration` |
 | enumeration | one member of a declared closed set | the enumeration's named type |
 | boolean | the one spelling that changes it: `-name` when the default is off, `-no-name` when it is on. It takes no value | `bool` |
-| names | comma-separated names | `[]string` |
-| integers | comma-separated integers | `[]int64` |
+| list of `<type>` | comma-separated elements, each checked as its own type | a slice of the element type |
 
-**The guide names the first five types; the last three are this document's additions**, and each is
-flagged rather than assumed. The two list types exist because real tools take lists — which arenas
-to work, which tags to select — and the alternative is a string every command parses for itself,
-which is the defect this library exists to remove. The duration's grammar is
-[BASE's](https://github.com/promise-language/reactor/blob/main/docs/base-engineering.md#durations),
-so that one duration spelling travels a command line, a parameter file and a manifest unchanged.
-[Open questions](#open-questions) carries both.
+**Every one of these is the guide's**, and this document adds no type of its own. The list type and
+the duration's grammar were this library's additions until the guide adopted both ([flag
+form](org/cli-guide.md#flag-form)); what had been a divergence to flag is now the one definition,
+and the library implements it rather than restating why it exists.
 
 **A path is resolved where the tool was invoked, never where it lives.** A tool knows its
 repository from its build stamp ([project-tools.md#make](project-tools.md#make)), and a path
@@ -184,10 +182,10 @@ so no hand-written usage text exists anywhere to drift from what a command accep
 - **The root's help is the full surface.** It lists every command path, and under each command
   every flag with its type, its default, and its one-line description.
 - **A computed set is described, not enumerated.** Help says what the set is and which invocation
-  lists it, because the enumeration has one home and `-help` is not it
-  ([tool-contract.md](https://github.com/promise-language/workspace/blob/main/docs/tool-contract.md),
-  Required tools). [Open questions](#open-questions) carries this against the guide's Help and
-  version.
+  lists it, because the enumeration has one home and `-help` is not it (workspace's
+  `tool-contract.md`, Required tools). The guide requires the same: a set the tool does not author
+  is closed by the definition that lists it, and help describes it ([help and
+  version](org/cli-guide.md#help-and-version), [subcommands](org/cli-guide.md#subcommands)).
 
 **The brief form answers a bare invocation of a command that requires one, and it is not the
 help.**
@@ -273,8 +271,9 @@ for it with `-json` rather than relying on a pipe being detected on its behalf.
 --envelope` writes an envelope and `run <gate> --verdict` writes a verdict, and both shapes belong
 to documents outside this one. `-human` on either is a contradiction and exits 2: there is no human
 rendering to select, and a flag that was accepted and ignored is the silent-failure case Fail
-closed exists to prevent. **This is the one place the library departs from the guide as written**,
-whose Output modes makes `-human` unconditional, and [Open questions](#open-questions) carries it.
+closed exists to prevent. This was the one place the library departed from the guide as written;
+the guide now carries the same rule, and the refusal names the contract that owns the output
+([output modes](org/cli-guide.md#output-modes)).
 
 ## Exit status and refusal
 
@@ -289,8 +288,8 @@ outcome testable without starting a process.
 | `2` | The invocation was malformed, and nothing was done. |
 | `3` | **Refused:** the binary declined to run, and nothing was done. |
 
-The first three are the guide's Exit codes. The fourth is this document's, and
-[Open questions](#open-questions) carries it.
+All four are the guide's ([exit codes](org/cli-guide.md#exit-codes)). The fourth was this
+document's until the guide adopted it.
 
 **A refusal is not a failure, and a caller must be able to tell the two apart without reading
 prose.** A tool that exits 1 over a stale build has not measured the tree, has not built anything,
@@ -374,40 +373,3 @@ project's `tested` gate rather than the first invocation that reaches it.
 - **It reads no environment variable**, neither for a parameter nor for the output mode. The two
   uses the guide's Explicit inputs sanctions are a tool's own debug diagnostics and a guard's
   containment markers, and the library needs neither.
-
-## Open questions
-
-**Whether a computed command name may carry a colon.** Gate names are `concept:instance`
-([gates-and-commands.md](https://github.com/promise-language/flow/blob/main/docs/gates-and-commands.md),
-The names), and the protocol's exec lines place a flag after the name: `bin/gate tested:root
---envelope`, `bin/run tested:root --verdict`. Under One order that is correct only if the name is
-the command path, and Flag form's alphabet admits no colon. Two resolutions exist: admit it as the
-separator of an instance in a computed command name, or re-spell the protocol as `bin/gate tested
-root --envelope`, which changes the exec lines flow and base both define. **The recommendation is
-the first**, and it is [org#16](https://github.com/promise-language/org/issues/16).
-
-**Whether a boolean is a pair or a single spelling.** Flag form states the pair unconditionally:
-`-my-flag` asserts and `-no-my-flag` denies. [Types](#types) defines only the spelling that changes
-the default, because the other one asserts what silence already says, which the guide's own
-one-name-per-flag rule and the engineering guide's one obvious way both refuse. **The
-recommendation is the single spelling**, and it is
-[org#5](https://github.com/promise-language/org/issues/5).
-
-**Whether the guide gains a refusal status.** Exit codes defines three, so a tool that declined to
-run and a tool that failed report the same number, and the distinction survives only as prose on
-stderr. **The recommendation is the fourth status**, and it is
-[org#17](https://github.com/promise-language/org/issues/17).
-
-**Whether the guide admits a tool whose output another contract fixes.** Output modes requires
-every tool to support `-human`, and Help and version requires `-help` to print every subcommand.
-Neither has room for a command whose stdout is an envelope or a verdict, nor for a subcommand set
-that is the project's gates rather than the tool's own vocabulary — which is why [Output](#output)
-refuses `-human` on two commands and [Help and version](#help-and-version) describes a computed set
-instead of listing it. **The recommendation is that the guide carve out both**, and it is
-[org#19](https://github.com/promise-language/org/issues/19).
-
-**Whether the guide's type list is closed.** Flag form names string, integer, boolean, duration,
-path and enumeration. [Types](#types) adds two list types and fixes the duration's grammar. **The
-recommendation is that the guide name the list types and adopt one duration grammar**, and it is
-[org#20](https://github.com/promise-language/org/issues/20); a tool taking a list is otherwise
-written against this document rather than against the guide.
