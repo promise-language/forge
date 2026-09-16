@@ -74,7 +74,7 @@ func TestVerifiedTreeRecordAndClear(t *testing.T) {
 	if err := recordVerifiedTree(root); err != nil {
 		t.Fatal(err)
 	}
-	rec := filepath.Join(root, filepath.FromSlash(verifiedTreeRecord))
+	rec := recordPath(root)
 	body, err := os.ReadFile(rec)
 	if err != nil {
 		t.Fatalf("no record was written: %v", err)

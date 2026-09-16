@@ -17,12 +17,19 @@
 //   - help.go      HasHelpFlag, MaybeHelp — usage before anything else, so help
 //     answers however stale the binary is.
 //   - setup.go     RunSetup — the git-hook wiring.
+//   - verifiedtree.go  VerifiedTreeRecord — where a project's verify records
+//     the tree it blessed, and the workspace's commit guard reads it.
 //
 // The membership test is whether two projects could disagree about a thing and
 // both be right. A hash function has one correct answer; so does a staleness
 // check, and so does whether the executable suffix is ".exe" (What belongs here). What fails
 // that test stays in each project's own tools/build/common: the verify pipeline,
 // the gate set, the judging terms, anything naming one project.
+//
+// A value two components must agree on lives here for the same reason, even
+// where neither end's code does: a record's path, a sidecar's name, a directory
+// the workspace writes into. Prose at each end is not an agreement, it is two
+// statements that happen to match today (What belongs here).
 //
 // # No dependency, deliberately
 //

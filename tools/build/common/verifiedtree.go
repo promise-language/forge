@@ -2,15 +2,17 @@ package common
 
 // This file is the writing end of the verified-tree contract
 // (workspace's tool-contract.md, precommit-guard): bin/verify records the tree it blessed
-// at .workspace/verified-tree, and the workspace-delivered precommit-guard
+// at primitives.VerifiedTreeRecord, and the workspace-delivered precommit-guard
 // refuses a commit whose staged tree differs.
 //
 // The reading end is not in this repository — the guard is a workspace tool,
 // built and owned there (tool-contract's The two sets), and this repo cannot import it. What the two
 // ends share is the record's location and format, not code: one git tree
-// object id, newline terminated, at the path below. Spelling it wrong here is
-// a permanent, silent refusal — verify writes one path, the guard reads
-// another and always finds it absent — so it is a constant, named once.
+// object id, newline terminated, at that path. The path is imported rather
+// than typed here, because a path typed at each end agrees only by coincidence
+// and spelling it wrong is a permanent, silent refusal — verify writes one
+// path, the guard reads another and always finds it absent (docs/primitives.md,
+// What belongs here).
 //
 // Without this end, every commit in this checkout is refused: nothing ever
 // blesses a tree, and the guard's named recovery ("run bin/verify") cannot
@@ -23,17 +25,23 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/promise-language/forge/primitives"
 )
 
-// verifiedTreeRecord is where verify records the tree it blessed, in the
-// gitignored per-checkout .workspace/ directory.
-const verifiedTreeRecord = ".workspace/verified-tree"
+// recordPath is where the record lives in the checkout at repoRoot. Everything
+// this file touches is derived from it — including the directory it is created
+// in — so the temp file and the name it is renamed to cannot end up in
+// different places, which is what would make the rename non-atomic.
+func recordPath(repoRoot string) string {
+	return filepath.Join(repoRoot, filepath.FromSlash(primitives.VerifiedTreeRecord))
+}
 
 // clearVerifiedTree removes the record. Verify calls it before its first step
 // so a run that dies mid-way leaves nothing blessed and an in-flight verify
 // blesses nothing. An absent record is not an error.
 func clearVerifiedTree(repoRoot string) error {
-	err := os.Remove(filepath.Join(repoRoot, filepath.FromSlash(verifiedTreeRecord)))
+	err := os.Remove(recordPath(repoRoot))
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -93,11 +101,14 @@ func recordVerifiedTree(repoRoot string) error {
 		return fmt.Errorf("computing verified tree: %w", err)
 	}
 
-	dir := filepath.Join(repoRoot, ".workspace")
+	record := recordPath(repoRoot)
+	dir := filepath.Dir(record)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
 	// Atomic: temp file + rename, so no reader ever sees a half-written record.
+	// The temp file is made in the record's own directory, since a rename is
+	// only atomic within one filesystem.
 	tmp, err := os.CreateTemp(dir, ".verified-tree-*")
 	if err != nil {
 		return err
@@ -111,7 +122,7 @@ func recordVerifiedTree(repoRoot string) error {
 		os.Remove(tmp.Name())
 		return err
 	}
-	if err := os.Rename(tmp.Name(), filepath.Join(repoRoot, filepath.FromSlash(verifiedTreeRecord))); err != nil {
+	if err := os.Rename(tmp.Name(), record); err != nil {
 		os.Remove(tmp.Name())
 		return err
 	}
