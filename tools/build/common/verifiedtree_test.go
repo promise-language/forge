@@ -1,10 +1,14 @@
 package common
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -230,6 +234,42 @@ func TestRecordLandsOnTheContractPath(t *testing.T) {
 	}
 }
 
+// A RECORD THAT CANNOT BE WRITTEN FAILS THE RUN, the other way round from the
+// clear below. Every other test here records successfully, so nothing measures
+// what happens when the write does not land — and a nil returned from here is
+// the one failure that presents as success: record is the last step, so the run
+// prints OK to Commit having blessed nothing, and the guard then refuses every
+// commit in the checkout while naming a recovery, re-running verify, that
+// reproduces it exactly.
+func TestRecordReportsAWriteItCannotMake(t *testing.T) {
+	dir := verifyRepoForTest(t)
+	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
+	// A non-empty directory where the record belongs: the rename onto it fails
+	// on every host, which the permission bits this test could set instead do
+	// not (the suite may run as a user nothing refuses).
+	writeFile(t, filepath.Join(recordPath(dir), "occupied"), "x\n")
+
+	if err := recordVerifiedTree(dir); err == nil {
+		t.Fatal("recordVerifiedTree reported success although the record could not be written")
+	}
+	// The half-written record is taken back with it. It is the one file the
+	// failure path is responsible for, and it lands in the directory a project
+	// ignores, so a leak here is invisible until it has happened many times.
+	entries, err := os.ReadDir(filepath.Dir(recordPath(dir)))
+	if err != nil {
+		t.Fatalf("read the record's directory: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".verified-tree-") {
+			t.Errorf("a failed record left %s behind", e.Name())
+		}
+	}
+	// And it disturbed nothing it could not replace.
+	if !primitives.Exists(filepath.Join(recordPath(dir), "occupied")) {
+		t.Error("the record step removed what stood where the record belongs")
+	}
+}
+
 func TestClearVerifiedTree(t *testing.T) {
 	dir := t.TempDir()
 	record := recordPath(dir)
@@ -253,6 +293,97 @@ func TestRecordOutsideGitCheckout(t *testing.T) {
 	if primitives.Exists(recordPath(dir)) {
 		t.Error("no record should be written outside a git checkout")
 	}
+}
+
+// The path being RIGHT is not the requirement; being held in ONE PLACE is.
+// A recordPath that built the same path out of its own literals would pass
+// every test above, and go on passing until the day the value moves and one end
+// does not follow — which is the coincidence the constant exists to end
+// (docs/primitives.md, What belongs here: "Prose at each end is not an
+// agreement; it is two statements that happen to match today"). Nothing else
+// here notices a copy while the copy is still correct.
+//
+// Both halves are needed. Without the reference, a file that types the path
+// again in pieces is a second statement; without the literal scan, one that
+// imports the constant and then ignores it passes on the import alone.
+func TestWritingEndTakesThePathFromTheConstant(t *testing.T) {
+	const src = "verifiedtree.go"
+	typed, usesConstant, err := recordPathLiterals(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usesConstant {
+		t.Errorf("%s never names primitives.VerifiedTreeRecord — whatever path it writes to, it is not the one the guard was told about", src)
+	}
+	for _, lit := range typed {
+		t.Errorf("%s types %s out; the writing end takes the path from primitives.VerifiedTreeRecord, and a second spelling agrees with the reading end only by coincidence", src, lit)
+	}
+}
+
+// The scan itself, over a file that breaks the rule: without this the test above
+// passes whether or not it can see a copy at all — including if it stopped
+// parsing the file, which reads as coverage of a rule nothing was checked
+// against. Both shapes a copy takes are here: the whole path, and the segments
+// a filepath.Join spreads it over.
+func TestRecordPathLiteralsSeesACopy(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "copy.go")
+	writeFile(t, src, `package common
+
+import "path/filepath"
+
+func whole(r string) string  { return filepath.Join(r, ".workspace/verified-tree") }
+func pieces(r string) string { return filepath.Join(r, ".workspace", "verified-tree") }
+func near(r string) string   { return filepath.Join(r, ".verified-tree-*", "verified-tree-") }
+`)
+	typed, usesConstant, err := recordPathLiterals(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usesConstant {
+		t.Error("a file that names the constant nowhere was reported as using it")
+	}
+	if len(typed) != 3 {
+		t.Errorf("found %v, want the whole path and both of its segments", typed)
+	}
+	// The temp-file names next door to the record are not spellings of it.
+	for _, lit := range typed {
+		if strings.Contains(lit, "*") || strings.HasSuffix(lit, `-"`) {
+			t.Errorf("%s is a temp-file pattern, not a copy of the path", lit)
+		}
+	}
+}
+
+// recordPathLiterals reports every string literal in the Go file at src that
+// spells the record path or one of its segments, and whether the file names the
+// constant at all. It reads the syntax rather than the text so that a comment
+// naming the path — prose, which every end is free to carry — is not mistaken
+// for a second statement of it.
+func recordPathLiterals(src string) (typed []string, usesConstant bool, err error) {
+	file, err := parser.ParseFile(token.NewFileSet(), src, nil, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	spellings := map[string]bool{primitives.VerifiedTreeRecord: true}
+	for _, seg := range strings.Split(primitives.VerifiedTreeRecord, "/") {
+		spellings[seg] = true
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.BasicLit:
+			if n.Kind != token.STRING {
+				return true
+			}
+			if v, err := strconv.Unquote(n.Value); err == nil && spellings[v] {
+				typed = append(typed, n.Value)
+			}
+		case *ast.SelectorExpr:
+			if pkg, ok := n.X.(*ast.Ident); ok && pkg.Name == "primitives" && n.Sel.Name == "VerifiedTreeRecord" {
+				usesConstant = true
+			}
+		}
+		return true
+	})
+	return typed, usesConstant, nil
 }
 
 func TestVerifyPipelineEndsWithRecord(t *testing.T) {
