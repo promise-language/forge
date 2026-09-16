@@ -7,12 +7,17 @@ import (
 	"testing"
 )
 
-// THIS IS THE ONE PLACE THE PATH IS WRITTEN OUT. Every end of the contract
-// imports the constant, so no other test in the fleet would notice its value
-// changing — and the end that would notice first is a guard in another
-// repository that this repository's build never runs. Changing the value must
-// therefore fail here, where it reads as what it is: a change to an agreement
-// with a reader nothing local can ask.
+// THIS IS THE ONE PLACE THE VALUE IS WRITTEN OUT. An end that imports the
+// constant follows it wherever it goes, so no test that reads a record would
+// notice its value changing — and the end that would notice first is a guard in
+// another repository that this repository's build never runs. Changing the
+// value must therefore fail here, where it reads as what it is: a change to an
+// agreement with a reader nothing local can ask.
+//
+// One end does not import it yet. cmd/init hands a scaffolded project its own
+// copy of the writing end with the path typed into it (verifiedTreeGoRaw), so
+// until that copy goes — it is #8's, with the other five helpers — a change to
+// this value has to be carried there by hand.
 func TestVerifiedTreeRecordIsTheAgreedPath(t *testing.T) {
 	const agreed = ".workspace/verified-tree"
 	if VerifiedTreeRecord != agreed {

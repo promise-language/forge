@@ -211,6 +211,25 @@ func TestRecordIsOneTreeIdNewlineTerminated(t *testing.T) {
 	}
 }
 
+// THE LOCATION IS THE OTHER HALF. Every other test here asks recordPath where
+// the record is, which is the same question the code under test answered: a
+// recordPath that stopped joining the constant would move the record and take
+// all of those assertions with it, green. This one joins the constant itself,
+// so the writing end is measured against the agreement rather than against its
+// own arithmetic.
+func TestRecordLandsOnTheContractPath(t *testing.T) {
+	dir := verifyRepoForTest(t)
+	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
+
+	if err := recordVerifiedTree(dir); err != nil {
+		t.Fatalf("recordVerifiedTree: %v", err)
+	}
+	if !primitives.Exists(filepath.Join(dir, filepath.FromSlash(primitives.VerifiedTreeRecord))) {
+		t.Errorf("nothing at %s — the writing end and the path the guard reads have parted",
+			primitives.VerifiedTreeRecord)
+	}
+}
+
 func TestClearVerifiedTree(t *testing.T) {
 	dir := t.TempDir()
 	record := recordPath(dir)
