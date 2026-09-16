@@ -127,7 +127,7 @@ Key properties:
 
 ## The staleness self check
 
-Every tool but `make` compares the hash it was stamped with against the hash of its stamped source set, before it reads any argument, and refuses when the two differ. Which conditions it refuses on, what status it exits with, and where the refusal is written are [project-tools.md](project-tools.md), [Staleness](project-tools.md#staleness); what the hash covers, and why a local `replace` widens it, is [`primitives.md`](primitives.md), [The staleness contract holds with nothing added](primitives.md#the-staleness-contract-holds-with-nothing-added).
+Every tool but `make` compares the hash it was stamped with against the hash of its stamped source set, and refuses when the two differ. At what point in an invocation it checks, which conditions it refuses on, what status it exits with, and where the refusal is written are [project-tools.md](project-tools.md), [Staleness](project-tools.md#staleness); what the hash covers, and why a local `replace` widens it, is [`primitives.md`](primitives.md), [The staleness contract holds with nothing added](primitives.md#the-staleness-contract-holds-with-nothing-added).
 
 This single check is what makes "edit a tool → re-run `./make`" the one-and-only developer workflow. Without it, a stale binary can silently produce wrong results for hours. And because the root is stamped in, the check is anchored to the binary's actual source tree — copying `bin/verify` into a different repo doesn't trick the staleness check into re-hashing the wrong `tools/build/`.
 
@@ -182,7 +182,7 @@ The hook is intentionally light, and that is a division of labour rather than a 
 
 `bin/tool-guard` is the harness-level guard for Claude Code, wired in the project's committed `.claude/settings.json` on **both** tool-use events. The file's text is the `settingsJSON` constant in [`cmd/init/main.go`](../cmd/init/main.go), which is what writes it; this document does not carry a second copy of it.
 
-`PreToolUse` is the gate and fails closed (`|| exit 2`); `PostToolUse` observes and fails quiet (`|| true`), because by then the tool has already run and an enforcing shape could only inject an error after a completed call. Which tools matter is the guard's decision, never a list in a settings file — hence `"matcher": "*"` on both.
+`PreToolUse` is the gate and fails closed; `PostToolUse` observes and fails quiet, because by then the tool has already run and an enforcing shape could only inject an error after a completed call. Which tools matter is the guard's decision, never a list in a settings file, so both events match every tool.
 
 **The command strings are exact, not a shape.** A conformance checker compares them byte-for-byte and reports any difference at error severity, so a wrapper, a reordering, or a helpfully-added flag is itself the deviation. That is also why they are stated once, in the constant that emits them: two projects whose guards are wired "equivalently" are two projects whose guards can be made to differ, and a prose copy of the wiring is the first place the two spellings part company.
 
@@ -200,7 +200,7 @@ Design rules:
 - **A gate holds no threshold and reaches no verdict.** It reports what it found and stops. Whether `unformatted_files: 3` is acceptable is [the judge and the terms](#the-judge-and-the-terms)' question, and a gate that answered it would be the threshold sitting inside the party under measurement.
 - **Stdout carries the envelope and nothing else.** Every child process a gate spawns has its stdout captured; progress goes to stderr. The envelope is written whole, in one write, so a run killed part-way leaves output that does not parse — which is how a reader tells "measured nothing" from "measured and reported" without asking a process that is no longer alive to answer.
 - **The gate vocabulary is closed.** A name absent from the project's gate map is refused rather than guessed at: a runner asking for a gate this project does not have must learn that, not receive an empty measurement that reads like a clean result.
-- **`--list` is the only other thing that writes to stdout**, and it exists so that nothing outside the project has to hold a second copy of what the project can measure. Asking the entry point is the only way to learn it that cannot go stale.
+- **`--list` exists so that nothing outside the project has to hold a second copy of what the project can measure.** Asking the entry point is the only way to learn it that cannot go stale.
 - **Discovery replaces a registry.** An in-tree config file declaring which gates exist would be a second list beside the one the code implements, and the two would eventually disagree. `--list` is generated from the map the measurements come from, so it cannot.
 
 ---
