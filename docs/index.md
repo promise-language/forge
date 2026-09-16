@@ -19,8 +19,8 @@ under-report and read as nearly done.
 
 ## Specifications
 
-- [blueprint.md](blueprint.md) — The build / verify / gate tooling pattern, packaged as a
-  generic recipe and scaffolder.
+- [blueprint.md](blueprint.md) — The model behind the build / verify / gate tooling, and why it is
+  shaped this way.
 - [command-line.md](command-line.md) — The one implementation of the CLI guide that every tool
   built from a project's tools module is made from.
 - [primitives.md](primitives.md) — The shared library every managed project's dev tooling is
@@ -41,7 +41,7 @@ locally under their tags is its own compliance gaps.
 The corpus should be listed here once, as the directory, with
 [org/stamp.json](org/stamp.json) naming its members — `normative.md`, Location. It is listed
 per-file instead because `precommit-guard`'s docs-consistency check still requires that; see
-issue #14.
+issue #2.
 
 - [org/normative.md](org/normative.md) — What makes a document binding, and the one docs
   structure every project holds.

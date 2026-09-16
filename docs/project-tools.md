@@ -614,29 +614,11 @@ its own first consumer), and copies no helper `primitives` carries:
 - the layout above: a definition returning `tooling.Standard()`, and the five `main`s;
 - `tools/gates/thresholds.json` holding the standard caps, and an empty `baselines.json`;
 - a `go.mod` requiring forge at the release `cmd/init` was built from;
-- the committed wiring for the tools the project does not build — `.githooks/pre-commit` and
-  `.claude/settings.json`;
+- the committed wiring for the agent guard, `.claude/settings.json`. It emits no `.githooks/`
+  wiring: the commit guard and the hook that reaches it are both `workspace setup`'s
+  ([blueprint.md](blueprint.md), The commit gate hook);
 - the `.gitignore` entries [setup](#setup) requires.
 
 **This repository's `tools/build` is that layout**, with its `replace` pointing at this tree
 (primitives.md, The staleness contract holds with nothing added). It is the library's first consumer:
 a change to the library is measured by this repository's own gates before any project raises its pin.
-
-## What ratification amends
-
-- **[primitives.md](primitives.md)**, What belongs here and its open question. The harness is the
-  library's. What stays with the project is the definition and the terms.
-- **[blueprint.md](blueprint.md):**
-  - What the model gives you — the hash's algorithm, the one-per-line listing, and the two stamped
-    variables.
-  - Repository layout, Shared common library and Step by step implementation guide — the definition
-    replaces the pipeline code held in `common/`.
-  - The meta builder and The staleness self check — the derived source set, the single stamp,
-    `-rebuild`, pruning, and the refusal.
-  - The commit gate — stages, the repair, the ratchet, the lock's location.
-  - Tools the project does not build, The commit gate hook and The agent guard — the committed
-    wiring, which the scaffolder emits rather than prose describes.
-  - The gate entry point and The judge and the terms — the surfaces and the terms.
-  - Cache isolation — the cache moves under `.home/cache/`.
-  - What this model deliberately avoids, on frameworks — the harness is deliberately one.
-  - Reference — the reference is the library, not the scaffolder's constants.
