@@ -211,6 +211,38 @@ func TestAStaleBinaryRefusesEvenHelp(t *testing.T) {
 
 // The two modes another contract claims keep their stream clean even here: a
 // runner parsing stdout for an envelope must not find a refusal there.
+// WHAT THE GATE IS FOR: one envelope on stdout, whatever stdout is
+// (docs/project-tools.md, Gate). The measurement no longer prints itself — it
+// is returned as a result and the library writes it — and nothing else in the
+// tree exercises that wiring: verify calls the measurements in process, and the
+// judge's own tests stand a fixture in for this binary. An action that returned
+// nothing would exit 0 having written nothing at all, which is the one thing a
+// runner parsing this stream cannot tell from a gate that was never asked.
+func TestAMeasurementIsOneEnvelopeOnStdout(t *testing.T) {
+	root, hash := fitRepo(t)
+	const measured = "formatted"
+
+	// At a terminal too: the shape belongs to the gate contract rather than to
+	// whoever is reading, so it is the envelope either way.
+	out, errs, status := invoke(t, root, hash, []string{measured, "--envelope"}, true)
+	if status != command.StatusDone {
+		t.Fatalf("status %d (%q)", status, errs)
+	}
+	var envelope common.Envelope
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("stdout %q is not an envelope: %v", out, err)
+	}
+	if envelope.Gate != measured {
+		t.Errorf("the envelope names gate %q, want %q — a judge handed one it did not ask for must be able to refuse it", envelope.Gate, measured)
+	}
+	if len(envelope.Metrics) == 0 {
+		t.Error("the envelope carries no measurement at all")
+	}
+	if strings.Count(strings.TrimSpace(out), "\n") != 0 {
+		t.Errorf("stdout carries more than the one object: %q", out)
+	}
+}
+
 func TestARefusalStaysOffTheStreamTheContractClaims(t *testing.T) {
 	root, _ := fitRepo(t)
 	var out, errs strings.Builder

@@ -88,6 +88,47 @@ func TestRunOneGateNeedsTheManifest(t *testing.T) {
 	}
 }
 
+// WHAT A PERSON READS IS EACH MEASUREMENT BESIDE THE TERM IT WAS JUDGED ON
+// (docs/project-tools.md, Run). That rendering used to be printed from inside
+// RunOneGate; it now travels out on the result and the library renders it, so
+// it reaches a stream only through Judged.Human. The field carrying it is
+// unexported and filled in one place — dropping it from that literal leaves
+// `bin/run <gate>` printing nothing a terminal, with the verdict still right
+// and every other test in this file still green.
+func TestJudgedHumanShowsEveryMeasurementBesideItsTerm(t *testing.T) {
+	dir := writeManifest(t, testedManifest)
+
+	judged, err := RunOneGate(dir, asSubprocess(t, "gate-clean"), "tested", io.Discard)
+	if err != nil {
+		t.Fatalf("a measurement inside every cap could not be reached: %v", err)
+	}
+	var shown strings.Builder
+	if err := judged.Human(&shown); err != nil {
+		t.Fatalf("rendering an acceptable measurement: %v", err)
+	}
+	for _, want := range []string{"failed_tests", "at_most 0", "✓"} {
+		if !strings.Contains(shown.String(), want) {
+			t.Errorf("the rendering does not say %q:\n%s", want, shown.String())
+		}
+	}
+
+	// And a measurement over its cap says so where the person is looking,
+	// rather than only in the status they have to notice.
+	over, err := RunOneGate(dir, asSubprocess(t, "gate-over-cap"), "tested", io.Discard)
+	if err != nil {
+		t.Fatalf("a measurement over its cap could not be reached: %v", err)
+	}
+	shown.Reset()
+	if err := over.Human(&shown); err != nil {
+		t.Fatalf("rendering a measurement over its cap: %v", err)
+	}
+	for _, want := range []string{"failed_tests", "✗", over.Verdict.Detail} {
+		if !strings.Contains(shown.String(), want) {
+			t.Errorf("the rendering does not say %q:\n%s", want, shown.String())
+		}
+	}
+}
+
 // An unknown name is refused before anything is spawned: a runner asking for a
 // gate this project does not have must learn that.
 func TestRunOneGateRefusesAnUnknownName(t *testing.T) {

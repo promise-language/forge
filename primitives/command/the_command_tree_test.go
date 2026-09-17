@@ -1,6 +1,8 @@
 package command
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -94,4 +96,96 @@ func TestTheCommandTree(t *testing.T) {
 			t.Errorf("the delegating tool answered -help itself: %q", got.out)
 		}
 	})
+
+	t.Run("everything after the name reaches the program, and its status comes back", func(t *testing.T) {
+		// The refusal above is the branch where no program runs. This is the
+		// other one, and it is the whole of what delegating means: the words
+		// arrive unparsed, and the answer is the delegate's — a relay that
+		// dropped an argument, or reported 0 for a program that failed, is the
+		// silent success this document's Fail closed exists to prevent.
+		relaying := Tool{
+			Project: "tool",
+			Root: Command{
+				Name:    "tool",
+				Summary: "do one thing",
+				Children: func() []Command {
+					return []Command{{
+						Name:    "verify",
+						Summary: "the project's own gate",
+						Delegate: func(*Call) ([]string, *Refusal) {
+							return []string{os.Args[0], "-test.run=" + delegateHelper, "--"}, nil
+						},
+					}}
+				},
+			},
+		}
+		got := invoke(t, relaying, []string{"verify", "-json", "--", "-report"}, Streams{})
+		if got.status != StatusDone {
+			t.Errorf("status %d, want the delegate's own (%q)", got.status, got.errs)
+		}
+		// -json included: a delegating child declares none of the reserved
+		// flags, so the mode flag is a word meant for the delegate.
+		if handed := strings.TrimSpace(got.out); handed != "-json|--|-report" {
+			t.Errorf("the delegate was handed %q, want everything after the name verbatim", handed)
+		}
+
+		failing := invoke(t, relaying, []string{"verify", "-fail"}, Streams{})
+		if failing.status != 7 {
+			t.Errorf("status %d, want the delegate's own", failing.status)
+		}
+	})
+
+	t.Run("a delegate that names no program is a failure, not a silent success", func(t *testing.T) {
+		empty := Tool{
+			Project: "tool",
+			Root: Command{
+				Name:    "tool",
+				Summary: "do one thing",
+				Children: func() []Command {
+					return []Command{{
+						Name:     "verify",
+						Summary:  "the project's own gate",
+						Delegate: func(*Call) ([]string, *Refusal) { return nil, nil },
+					}}
+				},
+			},
+		}
+		got := invoke(t, empty, []string{"verify"}, Streams{})
+		if got.status != StatusFailed {
+			t.Errorf("status %d, want %d", got.status, StatusFailed)
+		}
+		got.says(t, "stderr", got.errs, "names no program to run")
+	})
+}
+
+// delegateHelper names the test below, which this binary re-executes to stand
+// in for the program a delegating child hands its arguments to. Re-executing
+// the test binary is the portable way to have a program that is certainly
+// present, reports what it was given, and exits with a status the case chose.
+const delegateHelper = "TestTheDelegateAProgramStandsIn"
+
+func TestTheDelegateAProgramStandsIn(t *testing.T) {
+	handed := argsAfterMarker()
+	if handed == nil {
+		t.Skip("this test is the program a delegating child hands its arguments to")
+	}
+	fmt.Println(strings.Join(handed, "|"))
+	for _, a := range handed {
+		if a == "-fail" {
+			os.Exit(7)
+		}
+	}
+	os.Exit(0)
+}
+
+// argsAfterMarker is what the delegating command handed over, which begins
+// after the marker its Delegate ended the argv with. Nil means this process is
+// an ordinary test run rather than the delegate.
+func argsAfterMarker() []string {
+	for i, a := range os.Args {
+		if a == endOfFlagsMarker {
+			return os.Args[i+1:]
+		}
+	}
+	return nil
 }
