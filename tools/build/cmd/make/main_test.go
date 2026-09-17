@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/promise-language/forge/primitives/command"
 )
 
 func mkdirs(t *testing.T, root string, names ...string) {
@@ -87,5 +89,22 @@ func TestUpToDate(t *testing.T) {
 	}
 	if upToDate(filepath.Join(binDir, "absent"), "SRCHASH", binDir, nil) {
 		t.Error("a missing sidecar reported up to date")
+	}
+}
+
+// A definition defect fails this project's tested gate rather than the first
+// invocation that reaches it (docs/command-line.md, What a tool decides).
+func TestTheDefinitionPassesTheLibrarysCheck(t *testing.T) {
+	for _, defect := range command.Check(define()) {
+		t.Errorf("make's definition: %v", defect)
+	}
+}
+
+// make is the builder every refusal names, so it declares nothing to refuse on:
+// a builder that could refuse because the binaries are stale would close the one
+// way out (docs/project-tools.md, Staleness).
+func TestTheBuilderNeverRefuses(t *testing.T) {
+	if define().Fit != nil {
+		t.Error("make can refuse, and it is the recovery every other refusal names")
 	}
 }

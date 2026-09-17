@@ -191,15 +191,19 @@ so no hand-written usage text exists anywhere to drift from what a command accep
 help.**
 
 ```
-workspace 4f2a91c
 expecting a subcommand: setup, update, doctor
+workspace 4f2a91c
+the workspace that manages a fleet of checkouts
 run `workspace -help` for all of them
 ```
 
+- **It opens with what is missing and the principal commands** that would satisfy it, which the
+  definition marks. The reader's question is what to type next, so it is answered on the first
+  line rather than after the build stamp. A tool that marks none names all of them, which is the
+  same answer while a tool is small.
 - **It names the binary and its version.** A reader who typed a name and stopped may also be
   holding the wrong build, and that costs one line.
-- **It names the principal commands**, which the definition marks. A tool that marks none names all
-  of them, which is the same answer while a tool is small.
+- **It says what the binary is**, in the one line the root's summary already carries.
 - **It ends at the pointer to `-help`**, the one place the full surface appears.
 - **It goes to stderr, with an empty stdout, and the invocation's status is 2.**
 
@@ -238,9 +242,12 @@ that pipes uniformly gets wrong.
 - **The human mode is `<project> <text>`.**
 - **A build that recorded no version says so**, and never reports a version of the empty string.
 
-**`-help` and `-version` answer before anything else a tool does**, including
-[the refusal](#exit-status-and-refusal). Both describe the binary rather than act on the tree, and
-a stale binary's version is exactly the fact needed to diagnose it.
+**A binary that is not fit to act answers neither**, which is the guide's
+[exit codes](org/cli-guide.md#exit-codes): what a stale binary would print is the surface it was
+built with, in the one place an operator goes to learn what a tool is.
+[The refusal](#exit-status-and-refusal) therefore comes first, before the command line is read at
+all, and the builder that refusal names keeps answering — it is never stale, so its help is never
+the stale surface the rule is about.
 
 ## Output
 

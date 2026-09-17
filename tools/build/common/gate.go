@@ -22,6 +22,7 @@ package common
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -372,36 +373,6 @@ func MeasureGate(repoRoot, name string) (Envelope, error) {
 	}
 	env.Incomplete = strings.Join(reasons, "; ")
 	return env, nil
-}
-
-// ParseGateArgs reads a gate invocation: exactly one name, and whether the
-// caller asked for an envelope.
-//
-// The rules it enforces are the protocol, not this program's preferences. A
-// gate is asked for one way, because two callers asking the same thing must
-// not be able to get different answers and both be right — so an unknown flag
-// is refused rather than ignored, and a second name is refused rather than
-// silently dropped.
-func ParseGateArgs(repoRoot string, args []string) (name string, envelope bool, err error) {
-	for _, a := range primitives.NormalizeArgs(args) {
-		switch {
-		case a == "-envelope":
-			envelope = true
-		case strings.HasPrefix(a, "-"):
-			return "", false, fmt.Errorf("use of unknown flag %q", a)
-		case name != "":
-			return "", false, fmt.Errorf("unexpected argument %q; a gate is asked for by name, once", a)
-		default:
-			name = a
-		}
-	}
-	if name == "" {
-		return "", false, fmt.Errorf("no gate named; known gates: %s", strings.Join(GateNames(repoRoot), ", "))
-	}
-	if !KnownGate(repoRoot, name) {
-		return "", false, unknownGate(repoRoot, name)
-	}
-	return name, envelope, nil
 }
 
 // unknownGate is the refusal every entry point gives for a name this project
@@ -796,4 +767,15 @@ func totalCoverage(s string) (float64, bool) {
 func firstLine(s string) string {
 	first, _, _ := strings.Cut(s, "\n")
 	return first
+}
+
+// Measured is one gate's envelope as the result the library writes. The shape
+// is base's gate contract's, and this type exists only to carry it out of the
+// action without the action reaching stdout itself.
+type Measured Envelope
+
+// Human is not reached: --envelope's stdout belongs to the gate contract, so
+// the command has one mode and the library never asks for a rendering.
+func (m Measured) Human(io.Writer) error {
+	return fmt.Errorf("an envelope's shape is gate-contract.md's, and it has no rendering for a person")
 }

@@ -4,16 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"testing"
 )
 
-// Two things here are only observable across a process boundary: RunOneGate
-// runs the gate as a program, and CheckStale ends the process rather than
-// returning. Both are re-executions of this test binary, which is the only way
-// to see an exit status — and for the gate, the only way to produce the
-// failures the boundary introduces (a gate that dies, one that prints something
-// other than an envelope).
+// One thing here is only observable across a process boundary: RunOneGate runs
+// the gate as a program. The roles below are re-executions of this test binary,
+// which is the only way to produce the failures that boundary introduces — a
+// gate that dies, one that prints something other than an envelope.
 //
 // The role is read from the environment, which a child inherits because neither
 // caller clears it.
@@ -50,12 +47,6 @@ func runAsSubprocess(role string) {
 	case "gate-dies":
 		fmt.Fprintln(os.Stderr, "the gate fell over")
 		os.Exit(1)
-	case "check-stale":
-		CheckStale(os.Getenv("REPO"), os.Getenv("HASH"))
-		// Reached only when the binary is current. A distinct status, so
-		// "was allowed to run" is never confused with a clean exit after an
-		// abort.
-		os.Exit(9)
 	}
 	fmt.Fprintf(os.Stderr, "unknown subprocess role %q\n", role)
 	os.Exit(2)
@@ -76,20 +67,4 @@ func asSubprocess(t *testing.T, role string) string {
 	t.Helper()
 	t.Setenv(subprocessRole, role)
 	return os.Args[0]
-}
-
-// runSubprocess runs the binary asSubprocess named, returning its combined
-// output and exit status. RunOneGate spawns its own; this is for the roles
-// nothing else spawns.
-func runSubprocess(t *testing.T, bin string) (string, int) {
-	t.Helper()
-	out, err := exec.Command(bin).CombinedOutput()
-	if err == nil {
-		return string(out), 0
-	}
-	exit, ok := err.(*exec.ExitError)
-	if !ok {
-		t.Fatalf("re-running this binary: %v\n%s", err, out)
-	}
-	return string(out), exit.ExitCode()
 }

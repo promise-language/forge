@@ -6,16 +6,16 @@
 //
 // What lives here:
 //
+//   - command/     the one implementation of the CLI guide: how every tool
+//     parses its invocation, renders its help, selects its output mode and
+//     chooses its exit status.
 //   - hash.go      SourceHash / ToolsSourceHash — the FNV-128a digest over a
 //     repository's tool source that the staleness check rests on.
-//   - stale.go     StaleReason, MakeCmd, CheckStale — a binary refuses to run
+//   - stale.go     StaleRefusal, MakeCmd, Recovery — a binary declines to run
 //     when the source it was built from has moved.
 //   - platform.go  IsWindows, ExeSuffix, BinaryName, Which, Exists.
 //   - exec.go      RunIn, RunOutputIn, OutputBytesIn, RunSilent — subprocess
 //     helpers with attached or captured streams.
-//   - args.go      NormalizeArgs — accept both -foo and --foo.
-//   - help.go      HasHelpFlag, MaybeHelp — usage before anything else, so help
-//     answers however stale the binary is.
 //   - setup.go     RunSetup — the git-hook wiring.
 //   - verifiedtree.go  VerifiedTreeRecord — where a project's verify records
 //     the tree it blessed, and the workspace's commit guard reads it.

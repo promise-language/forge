@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -80,7 +81,7 @@ func TestRecordMatchesRealStage(t *testing.T) {
 	git(t, dir, "commit", "-q", "-m", "base")
 	writeFile(t, filepath.Join(dir, "a.txt"), "a2\n")
 
-	if err := recordVerifiedTree(dir); err != nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	git(t, dir, "add", "-A")
@@ -99,7 +100,7 @@ func TestRecordIncludesUntracked(t *testing.T) {
 	git(t, dir, "commit", "-q", "-m", "base")
 	writeFile(t, filepath.Join(dir, "new.txt"), "new\n")
 
-	if err := recordVerifiedTree(dir); err != nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	names := git(t, dir, "ls-tree", "-r", "--name-only", recordedTree(t, dir))
@@ -119,7 +120,7 @@ func TestRecordRespectsIgnoreRules(t *testing.T) {
 	git(t, dir, "commit", "-q", "-m", "base")
 	writeFile(t, filepath.Join(dir, "ignored.txt"), "ignored\n")
 
-	if err := recordVerifiedTree(dir); err != nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	names := git(t, dir, "ls-tree", "-r", "--name-only", recordedTree(t, dir))
@@ -148,7 +149,7 @@ func TestRecordTrackedSetFollowsIndexNotHEAD(t *testing.T) {
 	git(t, dir, "add", "-f", "added.txt")
 	git(t, dir, "rm", "-q", "--cached", "dropped.txt")
 
-	if err := recordVerifiedTree(dir); err != nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	git(t, dir, "add", "-A")
@@ -175,7 +176,7 @@ func TestRecordLeavesIndexAlone(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "unstaged.txt"), "unstaged\n")
 
 	before := git(t, dir, "diff", "--cached", "--name-only")
-	if err := recordVerifiedTree(dir); err != nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	after := git(t, dir, "diff", "--cached", "--name-only")
@@ -194,7 +195,7 @@ func TestRecordIsOneTreeIdNewlineTerminated(t *testing.T) {
 	dir := verifyRepoForTest(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
 
-	if err := recordVerifiedTree(dir); err != nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	raw, err := os.ReadFile(recordPath(dir))
@@ -225,7 +226,7 @@ func TestRecordLandsOnTheContractPath(t *testing.T) {
 	dir := verifyRepoForTest(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
 
-	if err := recordVerifiedTree(dir); err != nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err != nil {
 		t.Fatalf("recordVerifiedTree: %v", err)
 	}
 	if !primitives.Exists(filepath.Join(dir, filepath.FromSlash(primitives.VerifiedTreeRecord))) {
@@ -249,7 +250,7 @@ func TestRecordReportsAWriteItCannotMake(t *testing.T) {
 	// not (the suite may run as a user nothing refuses).
 	writeFile(t, filepath.Join(recordPath(dir), "occupied"), "x\n")
 
-	if err := recordVerifiedTree(dir); err == nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err == nil {
 		t.Fatal("recordVerifiedTree reported success although the record could not be written")
 	}
 	// The half-written record is taken back with it. It is the one file the
@@ -287,7 +288,7 @@ func TestClearVerifiedTree(t *testing.T) {
 
 func TestRecordOutsideGitCheckout(t *testing.T) {
 	dir := t.TempDir()
-	if err := recordVerifiedTree(dir); err != nil {
+	if _, err := recordVerifiedTree(dir, io.Discard); err != nil {
 		t.Fatalf("outside a checkout recording should be a no-op, not an error: %v", err)
 	}
 	if primitives.Exists(recordPath(dir)) {
@@ -387,13 +388,13 @@ func recordPathLiterals(src string) (typed []string, usesConstant bool, err erro
 }
 
 func TestVerifyPipelineEndsWithRecord(t *testing.T) {
-	stub := verifyPipeline(t.TempDir())
+	stub := verifyPipeline(t.TempDir(), new(string))
 	if len(stub) == 0 || stub[len(stub)-1].name != "record" {
 		t.Errorf("stub pipeline should end with record: %v", stepNames(stub))
 	}
 	goDir := t.TempDir()
 	writeFile(t, filepath.Join(goDir, "go.mod"), "module example.test\n")
-	goSteps := verifyPipeline(goDir)
+	goSteps := verifyPipeline(goDir, new(string))
 	if len(goSteps) == 0 || goSteps[len(goSteps)-1].name != "record" {
 		t.Errorf("go pipeline should end with record: %v", stepNames(goSteps))
 	}
@@ -404,14 +405,21 @@ func TestRecordStepNotReachedAfterFailure(t *testing.T) {
 	// blesses nothing.
 	reached := false
 	steps := []step{
-		{"boom", func(string) error { return os.ErrInvalid }},
-		{"record", func(string) error { reached = true; return nil }},
+		{"boom", func(string, io.Writer) error { return os.ErrInvalid }},
+		{"record", func(string, io.Writer) error { reached = true; return nil }},
 	}
-	if err := runVerifySteps(t.TempDir(), steps); err == nil {
+	result := runVerifySteps(t.TempDir(), steps, io.Discard)
+	if result.OK || result.ExitStatus() != 1 {
 		t.Fatal("a failing step should fail the run")
 	}
 	if reached {
 		t.Error("record step must not run after an earlier failure")
+	}
+	// And the step that never ran says so, rather than being left out of the
+	// account of what happened.
+	last := result.Stages[len(result.Stages)-1]
+	if last.Name != "record" || last.Steps[0].Status != statusNotRun {
+		t.Errorf("the record step is reported as %+v, want it reported as not run", last)
 	}
 }
 
@@ -421,10 +429,19 @@ func TestRunVerifyStubClearsAndRecords(t *testing.T) {
 	dir := verifyRepoForTest(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
 	writeFile(t, recordPath(dir), "stale-garbage\n")
-	if err := RunVerify(dir, nil); err != nil {
+	result, err := RunVerify(dir, io.Discard)
+	if err != nil {
 		t.Fatalf("RunVerify: %v", err)
 	}
+	if !result.OK {
+		t.Fatalf("the stub pipeline failed: %+v", result)
+	}
 	got := recordedTree(t, dir)
+	// The tree it blessed travels in the result too, so a caller reading the
+	// JSON learns which tree without going to the file.
+	if result.Tree != got {
+		t.Errorf("the result says tree %q and the record says %q", result.Tree, got)
+	}
 	if got == "stale-garbage" {
 		t.Fatal("stale record survived the run")
 	}
@@ -445,8 +462,15 @@ func TestRunVerifyRedRunLeavesNothingBlessed(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.test\n")
 	writeFile(t, filepath.Join(dir, "broken.go"), "package broken\nfunc {\n")
 	writeFile(t, recordPath(dir), "stale-blessing\n")
-	if err := RunVerify(dir, nil); err == nil {
+	result, err := RunVerify(dir, io.Discard)
+	if err != nil {
+		t.Fatalf("RunVerify: %v", err)
+	}
+	if result.OK {
 		t.Fatal("verify over an unparseable Go file should fail")
+	}
+	if result.Tree != "" {
+		t.Errorf("a red run reported tree %q, and it blessed nothing", result.Tree)
 	}
 	if primitives.Exists(recordPath(dir)) {
 		t.Error("a red run must leave nothing blessed — the stale record survived")
@@ -466,7 +490,7 @@ func TestRunVerifyFailsWhenTheStaleRecordCannotBeCleared(t *testing.T) {
 	// machine the tests run on.
 	writeFile(t, filepath.Join(recordPath(dir), "occupied"), "x\n")
 
-	err := RunVerify(dir, nil)
+	_, err := RunVerify(dir, io.Discard)
 	if err == nil {
 		t.Fatal("RunVerify passed although the stale record could not be cleared")
 	}

@@ -18,7 +18,10 @@ package common
 // on every run. Two lists would let those disagree, and the disagreement's shape
 // is either a binary that is stale forever or one that never notices it is.
 
-import "github.com/promise-language/forge/primitives"
+import (
+	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
+)
 
 // sourceDirs names every directory holding this repository's tool source,
 // relative to the repo root.
@@ -27,18 +30,17 @@ func sourceDirs() []string {
 }
 
 // SourceHash is the digest of this repository's tool source. The meta-builder
-// bakes it into each binary; StaleReason recomputes it.
+// bakes it into each binary; Fit recomputes it.
 func SourceHash(repoRoot string) (string, error) {
 	return primitives.SourceHash(repoRoot, sourceDirs()...)
 }
 
-// StaleReason reports why this binary is out of sync with the tool source it
-// was built from, or "" if it is current.
-func StaleReason(repoRoot, compiledHash string) string {
-	return primitives.StaleReason(repoRoot, compiledHash, sourceDirs()...)
-}
-
-// CheckStale aborts a tool whose logic has moved since it was compiled.
-func CheckStale(repoRoot, compiledHash string) {
-	primitives.CheckStale(repoRoot, compiledHash, sourceDirs()...)
+// Fit is what every tool but the meta-builder answers command.Tool.Fit with: it
+// reports why this binary may not act, or nil when it may. The dirs are this
+// file's list, so a tool never names them and no two tools can name different
+// ones.
+func Fit(tool, repoRoot, compiledHash string) func() *command.Refusal {
+	return func() *command.Refusal {
+		return primitives.StaleRefusal(tool, repoRoot, compiledHash, sourceDirs()...)
+	}
 }

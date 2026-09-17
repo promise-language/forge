@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/promise-language/forge/primitives/command"
 )
 
 func write(t *testing.T, dir, name, body string) {
@@ -884,5 +886,48 @@ func TestScaffoldedDocsAreLinkClean(t *testing.T) {
 	}
 	if !strings.HasPrefix(docsIndexMd, "# ") {
 		t.Errorf("docs/index.md has no title:\n%s", docsIndexMd)
+	}
+}
+
+// A definition defect fails this project's tested gate rather than the first
+// invocation that reaches it (docs/command-line.md, What a tool decides).
+func TestTheDefinitionPassesTheLibrarysCheck(t *testing.T) {
+	for _, defect := range command.Check(define()) {
+		t.Errorf("init's definition: %v", defect)
+	}
+}
+
+// The scaffolder answers -help like every other tool, where it used to refuse
+// the flag as unknown input and carry no usage text at all.
+func TestHelpAnswersOnStdout(t *testing.T) {
+	var out, errs strings.Builder
+	status := command.Run(define(), []string{"-help"},
+		command.Streams{Out: &out, Err: &errs, OutIsTerminal: true, Dir: t.TempDir()})
+
+	if status != command.StatusDone {
+		t.Errorf("status %d, want 0 (%q)", status, errs.String())
+	}
+	for _, want := range []string{"-force", "target", "path"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("help %q does not describe %q", out.String(), want)
+		}
+	}
+}
+
+// A misspelled flag is refused, and nothing is scaffolded.
+func TestAnUnknownFlagScaffoldsNothing(t *testing.T) {
+	target := t.TempDir()
+	var out, errs strings.Builder
+	status := command.Run(define(), []string{"--fore", target},
+		command.Streams{Out: &out, Err: &errs, Dir: t.TempDir()})
+
+	if status != command.StatusMalformed {
+		t.Errorf("status %d, want %d", status, command.StatusMalformed)
+	}
+	if !strings.Contains(errs.String(), "did you mean -force") {
+		t.Errorf("stderr %q, want the nearest name", errs.String())
+	}
+	if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
+		t.Errorf("the target holds %v, want nothing written", entries)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,25 +209,26 @@ func TestJudge_AtLeastDirection(t *testing.T) {
 func TestJudgeStdin_WritesExactlyOneVerdictObject(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
 	env := Envelope{Gate: "tested", Metrics: []Metric{Count("failed_tests", 3), Count("failed_packages", 1)}}
-	var out bytes.Buffer
-	if err := JudgeStdin(dir, "tested", bytes.NewReader(marshal(t, env)), &out); err != nil {
+	verdict, err := JudgeStdin(dir, "tested", bytes.NewReader(marshal(t, env)))
+	if err != nil {
 		t.Fatalf("JudgeStdin: %v", err)
 	}
+	out := verdictBytes(t, verdict)
 
-	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	dec := json.NewDecoder(bytes.NewReader(out))
 	var wire struct {
 		Acceptable *bool              `json:"acceptable"`
 		Thresholds map[string]float64 `json:"thresholds"`
 		Detail     string             `json:"detail"`
 	}
 	if err := dec.Decode(&wire); err != nil {
-		t.Fatalf("the verdict does not parse: %v (%q)", err, out.String())
+		t.Fatalf("the verdict does not parse: %v (%q)", err, out)
 	}
 	if dec.More() {
-		t.Errorf("trailing content after the verdict: %q", out.String())
+		t.Errorf("trailing content after the verdict: %q", out)
 	}
 	if wire.Acceptable == nil {
-		t.Fatalf(`no "acceptable" field: %q`, out.String())
+		t.Fatalf(`no "acceptable" field: %q`, out)
 	}
 	if *wire.Acceptable {
 		t.Error("acceptable = true for three failing tests against a cap of 0")
@@ -247,13 +249,14 @@ func TestJudgeStdin_WritesExactlyOneVerdictObject(t *testing.T) {
 func TestJudgeStdin_WritesBothRequiredFieldsWhenThereIsNothingToSay(t *testing.T) {
 	dir := writeManifest(t, map[string]Threshold{})
 	env := Envelope{Gate: "covered", Metrics: []Metric{Quantity("statement_coverage", 12.5, "percent")}}
-	var out bytes.Buffer
-	if err := JudgeStdin(dir, "covered", bytes.NewReader(marshal(t, env)), &out); err != nil {
+	verdict, err := JudgeStdin(dir, "covered", bytes.NewReader(marshal(t, env)))
+	if err != nil {
 		t.Fatalf("JudgeStdin: %v", err)
 	}
+	out := verdictBytes(t, verdict)
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(out.Bytes(), &fields); err != nil {
-		t.Fatalf("the verdict does not parse: %v (%q)", err, out.String())
+	if err := json.Unmarshal(out, &fields); err != nil {
+		t.Fatalf("the verdict does not parse: %v (%q)", err, out)
 	}
 	if string(fields["acceptable"]) != "true" {
 		t.Errorf("acceptable = %q, want true", fields["acceptable"])
@@ -265,10 +268,10 @@ func TestJudgeStdin_WritesBothRequiredFieldsWhenThereIsNothingToSay(t *testing.T
 	}
 }
 
-// Nothing reaches stdout on any error path. A caller reads one verdict or
-// none: half an object beside an error message is a second channel, and the
-// two could disagree.
-func TestJudgeStdin_WritesNothingWhenItCannotAnswer(t *testing.T) {
+// Nothing is answered on any error path. A caller reads one verdict or none:
+// half an object beside an error message is a second channel, and the two
+// could disagree.
+func TestJudgeStdin_AnswersNothingWhenItCannotAnswer(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
 	for _, c := range []struct {
 		name     string
@@ -302,16 +305,15 @@ func TestJudgeStdin_WritesNothingWhenItCannotAnswer(t *testing.T) {
 		says:     "failed_tests",
 	}} {
 		t.Run(c.name, func(t *testing.T) {
-			var out bytes.Buffer
-			err := JudgeStdin(dir, c.gate, bytes.NewReader(c.envelope), &out)
+			verdict, err := JudgeStdin(dir, c.gate, bytes.NewReader(c.envelope))
 			if err == nil {
-				t.Fatalf("JudgeStdin answered a request it could not answer: %q", out.String())
+				t.Fatalf("JudgeStdin answered a request it could not answer: %+v", verdict)
 			}
 			if !strings.Contains(err.Error(), c.says) {
 				t.Errorf("err = %v, want it to name %q", err, c.says)
 			}
-			if out.Len() != 0 {
-				t.Errorf("wrote %q on an error path; a caller must read one verdict or none", out.String())
+			if verdict.Thresholds != nil || verdict.Acceptable || verdict.Detail != "" {
+				t.Errorf("answered %+v on an error path; a caller must read one verdict or none", verdict)
 			}
 		})
 	}
@@ -321,13 +323,12 @@ func TestJudgeStdin_WritesNothingWhenItCannotAnswer(t *testing.T) {
 // one.
 func TestJudgeStdin_AnUnreadableEnvelopeIsAnErrorAndNotAVerdict(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
-	var out bytes.Buffer
-	err := JudgeStdin(dir, "tested", failingReader{}, &out)
+	verdict, err := JudgeStdin(dir, "tested", failingReader{})
 	if err == nil {
 		t.Fatal("JudgeStdin reached a verdict from an envelope it could not read")
 	}
-	if out.Len() != 0 {
-		t.Errorf("wrote %q on an error path", out.String())
+	if verdict.Thresholds != nil || verdict.Acceptable || verdict.Detail != "" {
+		t.Errorf("answered %+v on an error path", verdict)
 	}
 }
 
@@ -343,15 +344,15 @@ func TestJudgeStdin_AgreesWithWhatAPersonIsShown(t *testing.T) {
 	env := Envelope{Gate: "tested", Metrics: []Metric{Count("failed_tests", 2), Count("failed_packages", 1)}}
 	acceptable, _, detail := judge(env, testedManifest)
 
-	var out bytes.Buffer
-	if err := JudgeStdin(dir, "tested", bytes.NewReader(marshal(t, env)), &out); err != nil {
+	verdict, err := JudgeStdin(dir, "tested", bytes.NewReader(marshal(t, env)))
+	if err != nil {
 		t.Fatalf("JudgeStdin: %v", err)
 	}
 	var wire struct {
 		Acceptable bool   `json:"acceptable"`
 		Detail     string `json:"detail"`
 	}
-	if err := json.Unmarshal(out.Bytes(), &wire); err != nil {
+	if err := json.Unmarshal(verdictBytes(t, verdict), &wire); err != nil {
 		t.Fatal(err)
 	}
 	if wire.Acceptable != acceptable || wire.Detail != detail {
@@ -360,44 +361,15 @@ func TestJudgeStdin_AgreesWithWhatAPersonIsShown(t *testing.T) {
 	}
 }
 
-// The invocation is the protocol, not this program's preferences: an unknown
-// flag is refused rather than ignored, and a second name refused rather than
-// dropped. A caller that meant --verdict and mistyped it must not silently get
-// the measuring mode, which spawns a gate.
-func TestParseRunArgs(t *testing.T) {
-	for _, c := range []struct {
-		args    []string
-		name    string
-		verdict bool
-		wantErr bool
-	}{
-		{args: []string{"tested"}, name: "tested"},
-		{args: []string{"tested", "--verdict"}, name: "tested", verdict: true},
-		{args: []string{"--verdict", "tested"}, name: "tested", verdict: true},
-		// Both spellings, as every other entry point here accepts.
-		{args: []string{"tested", "-verdict"}, name: "tested", verdict: true},
-		{args: []string{}, wantErr: true},
-		{args: []string{"--verdict"}, wantErr: true},
-		{args: []string{"tested", "formatted"}, wantErr: true},
-		{args: []string{"tested", "--verdicts"}, wantErr: true},
-		{args: []string{"tested", "--envelope"}, wantErr: true},
-		{args: []string{"lint"}, wantErr: true},
-	} {
-		name, verdict, err := ParseRunArgs(t.TempDir(), c.args)
-		if c.wantErr {
-			if err == nil {
-				t.Errorf("ParseRunArgs(%q) = (%q, %t, nil), want an error", c.args, name, verdict)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("ParseRunArgs(%q): %v", c.args, err)
-			continue
-		}
-		if name != c.name || verdict != c.verdict {
-			t.Errorf("ParseRunArgs(%q) = (%q, %t), want (%q, %t)", c.args, name, verdict, c.name, c.verdict)
-		}
+// verdictBytes is what a caller reads: the library marshals the verdict it was
+// handed and writes it whole, so the encoding of the value is the wire.
+func verdictBytes(t *testing.T, v Verdict) []byte {
+	t.Helper()
+	body, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return body
 }
 
 func marshal(t *testing.T, env Envelope) []byte {
@@ -442,36 +414,31 @@ func TestJudge_NamesEveryMetricOverItsCapNotJustTheFirst(t *testing.T) {
 // parser has already accepted the name, so it never answers a person.
 func TestUnknownGateIsRefusedTheSameWayByEveryEntryPoint(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
-	_, _, gateArgsErr := ParseGateArgs(t.TempDir(), []string{"lint"})
-	_, _, runArgsErr := ParseRunArgs(t.TempDir(), []string{"lint"})
-	var out bytes.Buffer
-	judgeErr := JudgeStdin(dir, "lint", bytes.NewReader([]byte(`{"gate":"lint","metrics":[]}`)), &out)
-	measureErr := RunOneGate("", "", "lint")
+	_, judgeErr := JudgeStdin(dir, "lint", bytes.NewReader([]byte(`{"gate":"lint","metrics":[]}`)))
+	judged, measureErr := RunOneGate("", "", "lint", io.Discard)
 
-	if out.Len() != 0 {
-		t.Errorf("the judging mode wrote %q for a gate this project does not have", out.String())
+	if judged.Envelope.Gate != "" {
+		t.Errorf("the measuring mode answered %+v for a gate this project does not have", judged)
 	}
 	for _, c := range []struct {
 		who string
 		err error
 	}{
-		{"ParseGateArgs", gateArgsErr},
-		{"ParseRunArgs", runArgsErr},
 		{"JudgeStdin", judgeErr},
 		{"RunOneGate", measureErr},
 	} {
 		if c.err == nil {
 			t.Fatalf("%s accepted a gate this project does not have", c.who)
 		}
-		if c.err.Error() != gateArgsErr.Error() {
-			t.Errorf("%s says %q, and ParseGateArgs says %q", c.who, c.err, gateArgsErr)
+		if c.err.Error() != judgeErr.Error() {
+			t.Errorf("%s says %q, and JudgeStdin says %q", c.who, c.err, judgeErr)
 		}
 	}
 	// The sentence has to carry both halves, or the reader is told only that
 	// they are wrong and not what would have been right.
 	for _, want := range []string{`"lint"`, "tested"} {
-		if !strings.Contains(gateArgsErr.Error(), want) {
-			t.Errorf("the refusal is %q, want it to carry %s", gateArgsErr, want)
+		if !strings.Contains(judgeErr.Error(), want) {
+			t.Errorf("the refusal is %q, want it to carry %s", judgeErr, want)
 		}
 	}
 }
@@ -506,19 +473,18 @@ func TestCappedMetrics(t *testing.T) {
 	}
 }
 
-// JudgeStdin with a missing manifest must return an error and write nothing to
-// stdout. Without this, removing the loadManifest call would silently pass
-// everything — the zero-threshold path is "nothing judged: acceptable".
+// JudgeStdin with a missing manifest must return an error and no verdict.
+// Without this, removing the loadManifest call would silently pass everything —
+// the zero-threshold path is "nothing judged: acceptable".
 func TestJudgeStdin_MissingManifestIsAnErrorAndNotAVerdict(t *testing.T) {
 	dir := t.TempDir() // no thresholds.json
 	env := Envelope{Gate: "tested", Metrics: []Metric{Count("failed_tests", 3)}}
-	var out bytes.Buffer
-	err := JudgeStdin(dir, "tested", bytes.NewReader(marshal(t, env)), &out)
+	verdict, err := JudgeStdin(dir, "tested", bytes.NewReader(marshal(t, env)))
 	if err == nil {
 		t.Fatal("JudgeStdin answered when the manifest was missing")
 	}
-	if out.Len() != 0 {
-		t.Errorf("wrote %q on an error path; a caller must read one verdict or none", out.String())
+	if verdict.Thresholds != nil || verdict.Acceptable || verdict.Detail != "" {
+		t.Errorf("answered %+v on an error path; a caller must read one verdict or none", verdict)
 	}
 }
 

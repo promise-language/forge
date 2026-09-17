@@ -1,6 +1,7 @@
 package common
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 )
 
 // sourceRepo is a stand-in for this repository's shape: a tools/build module and
@@ -70,14 +72,15 @@ func TestAnEditToEitherTreeIsStale(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if reason := StaleReason(repo, baked); reason != "" {
-				t.Fatalf("an untouched tree reported stale: %q", reason)
+			if refusal := Fit("gate", repo, baked)(); refusal != nil {
+				t.Fatalf("an untouched tree refused: %+v", refusal)
 			}
 
 			edit(t, repo, rel)
 
-			if reason := StaleReason(repo, baked); !strings.Contains(reason, "tools source has changed") {
-				t.Errorf("editing %s reported %q — the binary would claim to be current", rel, reason)
+			refusal := Fit("gate", repo, baked)()
+			if refusal == nil || refusal.Refusal != command.Stale {
+				t.Errorf("editing %s gave %+v — the binary would claim to be current", rel, refusal)
 			}
 		})
 	}
@@ -93,16 +96,17 @@ func TestAnEditOutsideTheToolSourceIsNotStale(t *testing.T) {
 	}
 	for _, rel := range []string{"docs/not-tool-source.md", "cmd/init/not-a-tool.go"} {
 		edit(t, repo, rel)
-		if reason := StaleReason(repo, baked); reason != "" {
-			t.Errorf("editing %s reported %q, want no staleness", rel, reason)
+		if refusal := Fit("gate", repo, baked)(); refusal != nil {
+			t.Errorf("editing %s gave %+v, want no refusal", rel, refusal)
 		}
 	}
 }
 
-// What a tool actually does about it: an edit to either tree stops the binary
-// before it can measure or repair anything with logic that has moved. This is
-// the acceptance the whole file exists for, seen from the end a person hits.
-func TestCheckStaleAbortsOnAnEditToEitherTree(t *testing.T) {
+// What a tool actually does about it: an edit to either tree stops the tool
+// before it can measure or repair anything with logic that has moved, and it
+// stops it at the refusal status with the refusal object on stdout. This is the
+// acceptance the whole file exists for, seen from the end a caller hits.
+func TestAnEditToEitherTreeRefusesEveryInvocation(t *testing.T) {
 	for _, rel := range []string{"tools/build/common/x.go", "primitives/y.go"} {
 		t.Run(rel, func(t *testing.T) {
 			repo := sourceRepo(t)
@@ -110,24 +114,46 @@ func TestCheckStaleAbortsOnAnEditToEitherTree(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			tool := func() command.Tool {
+				return command.Tool{
+					Project: "gate",
+					Version: baked,
+					Fit:     Fit("gate", repo, baked),
+					Root: command.Command{
+						Name:    "gate",
+						Summary: "measure one property of this tree",
+						Action: func(*command.Call) (command.Result, error) {
+							return nil, nil
+						},
+					},
+				}
+			}
 
-			bin := asSubprocess(t, "check-stale")
-			t.Setenv("REPO", repo)
-			t.Setenv("HASH", baked)
-			if out, code := runSubprocess(t, bin); code != 9 {
-				t.Fatalf("a current binary exited %d (%q), want it to have been allowed to run", code, out)
+			var out, errs strings.Builder
+			streams := command.Streams{Out: &out, Err: &errs}
+			if status := command.Run(tool(), nil, streams); status != command.StatusDone {
+				t.Fatalf("a current binary exited %d (%q), want it to have been allowed to run", status, errs.String())
 			}
 
 			edit(t, repo, rel)
 
-			out, code := runSubprocess(t, bin)
-			if code != 1 {
-				t.Fatalf("after editing %s the binary exited %d, want it to abort with 1", rel, code)
+			out.Reset()
+			errs.Reset()
+			// Even -help: what a stale binary would print is the surface it was
+			// built with, which is exactly what is out of date.
+			status := command.Run(tool(), []string{"-help"}, streams)
+			if status != command.StatusRefused {
+				t.Fatalf("after editing %s the tool exited %d, want the refusal status", rel, status)
 			}
-			for _, want := range []string{"tools source has changed", repo} {
-				if !strings.Contains(out, want) {
-					t.Errorf("the abort said %q, which does not name %q", out, want)
-				}
+			var refusal command.Refusal
+			if err := json.Unmarshal([]byte(out.String()), &refusal); err != nil {
+				t.Fatalf("stdout %q is not a refusal object: %v", out.String(), err)
+			}
+			if refusal.Refusal != command.Stale {
+				t.Errorf("refusal %q, want %q", refusal.Refusal, command.Stale)
+			}
+			if !strings.Contains(errs.String(), "tools source has changed") {
+				t.Errorf("stderr said %q, which does not say what moved", errs.String())
 			}
 		})
 	}

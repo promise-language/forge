@@ -1,6 +1,7 @@
 package common
 
 import (
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,22 +14,34 @@ import (
 
 func TestRunOneGateAcceptsAMeasurementWithinItsCap(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
-	if err := RunOneGate(dir, asSubprocess(t, "gate-clean"), "tested"); err != nil {
-		t.Errorf("a measurement inside every cap was refused: %v", err)
+	judged, err := RunOneGate(dir, asSubprocess(t, "gate-clean"), "tested", io.Discard)
+	if err != nil {
+		t.Fatalf("a measurement inside every cap could not be reached: %v", err)
+	}
+	if !judged.Verdict.Acceptable || judged.ExitStatus() != 0 {
+		t.Errorf("a measurement inside every cap was refused: %+v", judged.Verdict)
 	}
 }
 
-// The failure has to name the metric, its value and the term, or the person
-// reading it has to re-run the gate to learn what went wrong.
+// A measurement over its cap is an answer rather than an error: the result is
+// written, and the status says the answer was no. The detail has to name the
+// metric, its value and the term, or the person reading it has to re-run the
+// gate to learn what went wrong.
 func TestRunOneGateRefusesAMeasurementOverItsCap(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
-	err := RunOneGate(dir, asSubprocess(t, "gate-over-cap"), "tested")
-	if err == nil {
+	judged, err := RunOneGate(dir, asSubprocess(t, "gate-over-cap"), "tested", io.Discard)
+	if err != nil {
+		t.Fatalf("a measurement over its cap could not be reached: %v", err)
+	}
+	if judged.Verdict.Acceptable {
 		t.Fatal("a measurement over its cap was accepted")
 	}
-	for _, want := range []string{"tested", "failed_tests", "3"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal %q does not name %q", err, want)
+	if judged.ExitStatus() != 1 {
+		t.Errorf("exit status %d for a measurement over its cap, want 1", judged.ExitStatus())
+	}
+	for _, want := range []string{"failed_tests", "3"} {
+		if !strings.Contains(judged.Verdict.Detail, want) {
+			t.Errorf("the detail %q does not name %q", judged.Verdict.Detail, want)
 		}
 	}
 }
@@ -37,7 +50,7 @@ func TestRunOneGateRefusesAMeasurementOverItsCap(t *testing.T) {
 // and the two must not be reported the same way.
 func TestRunOneGateReportsOutputThatIsNotAnEnvelope(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
-	err := RunOneGate(dir, asSubprocess(t, "gate-not-an-envelope"), "tested")
+	_, err := RunOneGate(dir, asSubprocess(t, "gate-not-an-envelope"), "tested", io.Discard)
 	if err == nil {
 		t.Fatal("stdout that is not an envelope was read as a measurement")
 	}
@@ -53,7 +66,7 @@ func TestRunOneGateReportsOutputThatIsNotAnEnvelope(t *testing.T) {
 
 func TestRunOneGateReportsAGateThatDied(t *testing.T) {
 	dir := writeManifest(t, testedManifest)
-	err := RunOneGate(dir, asSubprocess(t, "gate-dies"), "tested")
+	_, err := RunOneGate(dir, asSubprocess(t, "gate-dies"), "tested", io.Discard)
 	if err == nil {
 		t.Fatal("a gate that exited without measuring was read as a pass")
 	}
@@ -66,7 +79,7 @@ func TestRunOneGateReportsAGateThatDied(t *testing.T) {
 // error rather than a verdict reached against no caps.
 func TestRunOneGateNeedsTheManifest(t *testing.T) {
 	dir := t.TempDir() // no thresholds.json
-	err := RunOneGate(dir, asSubprocess(t, "gate-clean"), "tested")
+	_, err := RunOneGate(dir, asSubprocess(t, "gate-clean"), "tested", io.Discard)
 	if err == nil {
 		t.Fatal("a gate was judged with no thresholds manifest")
 	}
@@ -82,7 +95,7 @@ func TestRunOneGateRefusesAnUnknownName(t *testing.T) {
 	// A binary that does not exist, so a name that reached the process
 	// boundary would fail differently and visibly.
 	absent := filepath.Join(dir, "no-such-gate")
-	err := RunOneGate(dir, absent, "not-a-gate")
+	_, err := RunOneGate(dir, absent, "not-a-gate", io.Discard)
 	if err == nil {
 		t.Fatal("an unknown gate name was measured")
 	}

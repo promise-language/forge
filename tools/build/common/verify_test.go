@@ -1,6 +1,7 @@
 package common
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,7 +87,7 @@ func TestRunAllModules_ReachesSecondModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runAllModules(root, "vet")
+	err := runAllModules(root, io.Discard, "vet")
 	if err == nil {
 		t.Fatal("runAllModules returned nil; the second module has a vet error that should have been caught")
 	}
@@ -106,7 +107,7 @@ func TestRunAllModules_StopsAtFirstFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runAllModules(root, "vet")
+	err := runAllModules(root, io.Discard, "vet")
 	if err == nil {
 		t.Fatal("runAllModules returned nil for a module that fails vet")
 	}
@@ -144,7 +145,7 @@ func TestVerifySteps_NonGoProjectGetsStubs(t *testing.T) {
 		t.Fatalf("got %d stub steps, want 4", len(steps))
 	}
 	for _, s := range steps {
-		if err := s.run(root); err != nil {
+		if err := s.run(root, io.Discard); err != nil {
 			t.Errorf("stub step %q failed: %v", s.name, err)
 		}
 	}
