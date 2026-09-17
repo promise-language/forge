@@ -1,6 +1,9 @@
 package command
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Parsing: the command path, then the flags, then the positionals — and every
 // problem with an invocation reported in one pass, with nothing done.
@@ -43,6 +46,21 @@ func TestParsing(t *testing.T) {
 			t.Errorf("status %d, want %d", got.status, StatusMalformed)
 		}
 		got.says(t, "stderr", got.errs, `-force is written after the argument "web"`)
+	})
+
+	t.Run("a flag after a word that is not a command is not also misplaced", func(t *testing.T) {
+		// `tool snyc -quiet` is the order One order asks for; the only thing
+		// wrong with it is the name. A tool that also told this operator to
+		// write the flag earlier would be naming a problem the invocation does
+		// not have.
+		got := invoke(t, tool, []string{"snyc", "-quiet"}, Streams{})
+		if got.status != StatusMalformed {
+			t.Errorf("status %d, want %d", got.status, StatusMalformed)
+		}
+		got.says(t, "stderr", got.errs, "unknown command snyc", "did you mean sync")
+		if strings.Contains(got.errs, "before the positional arguments") {
+			t.Errorf("the invocation was ordered correctly: %q", got.errs)
+		}
 	})
 
 	t.Run("-- ends the flags, and only there is a leading dash an argument", func(t *testing.T) {

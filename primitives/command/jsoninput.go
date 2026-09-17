@@ -55,20 +55,23 @@ func (p *parsed) applyJSONInput(cur *resolved, path string, s Streams, wantJSON,
 				continue
 			}
 			*positionals = args
+		// The reserved flags are keys like any other, and a parameter the file
+		// and the command line both name is a usage error there too: there is
+		// no precedence between them, whoever answers the flag.
 		case flagHelp:
-			if p.fileBool(path, key, raw) {
+			if p.given(path, key, p.help) && p.fileBool(path, key, raw) {
 				p.help = true
 			}
 		case flagVersion:
-			if p.fileBool(path, key, raw) {
+			if p.given(path, key, p.version) && p.fileBool(path, key, raw) {
 				p.version = true
 			}
 		case flagJSON:
-			if p.fileBool(path, key, raw) {
+			if p.given(path, key, *wantJSON) && p.fileBool(path, key, raw) {
 				*wantJSON = true
 			}
 		case flagHuman:
-			if p.fileBool(path, key, raw) {
+			if p.given(path, key, *wantHuman) && p.fileBool(path, key, raw) {
 				*wantHuman = true
 			}
 		default:
@@ -173,6 +176,18 @@ func (p *parsed) fileBool(path, key string, raw json.RawMessage) bool {
 		return false
 	}
 	return b
+}
+
+// given reports whether the file may still supply this reserved flag: it may
+// not where the command line already named it, which is the usage error a
+// parameter set both ways is. It returns false having reported that, so the
+// caller stops rather than applying one of the two.
+func (p *parsed) given(path, key string, onTheCommandLine bool) bool {
+	if !onTheCommandLine {
+		return true
+	}
+	p.problems = append(p.problems, p.bothWays(path, "-"+key))
+	return false
 }
 
 // bothWays is the usage error for a parameter the file and the command line

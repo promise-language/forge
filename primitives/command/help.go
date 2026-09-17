@@ -254,18 +254,18 @@ func describe(f helpFlag) string {
 // briefForm answers a bare invocation of a command that requires one, and it is
 // not the help (docs/command-line.md, Help and version).
 //
-// The reader here did not ask what the tool can do; they asked it to do
-// something and left a word out. So the missing word comes first, then which
-// build this is, then what the binary is, then where the full surface lives —
-// and the full surface itself stays one flag away, because a tool that answers
-// every mistake with its entire manual teaches people to skip the answer.
+// The version comes first because a reader who typed a name and stopped may
+// also be holding the wrong build, and that is the first thing a bug report
+// needs (docs/org/cli-guide.md, Help and version). Then the missing word and
+// the names that would supply it, then where the full surface lives — and the
+// full surface itself stays one flag away, because a tool that answers every
+// mistake with its entire manual teaches people to skip the answer.
 func briefForm(t Tool, r *resolved) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "expecting a subcommand: %s\n", principalNames(r))
 	if err := versionOf(t).Human(&b); err != nil {
 		return b.String()
 	}
-	fmt.Fprintf(&b, "%s\n", r.cmd.Summary)
+	fmt.Fprintf(&b, "expecting a subcommand: %s\n", principalNames(r))
 	fmt.Fprintf(&b, "run `%s -help` for all of them\n", strings.Join(r.path, " "))
 	return b.String()
 }

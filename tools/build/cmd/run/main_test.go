@@ -33,11 +33,11 @@ func TestABareInvocationAnswersTheBriefForm(t *testing.T) {
 		t.Errorf("stdout %q, want it empty", out)
 	}
 	lines := strings.Split(strings.TrimRight(errs, "\n"), "\n")
-	if len(lines) != 4 || !strings.HasPrefix(lines[0], "expecting a subcommand:") {
+	if len(lines) != 3 || !strings.HasPrefix(lines[1], "expecting a subcommand:") {
 		t.Fatalf("the brief form is:\n%s", errs)
 	}
-	if lines[1] != "run "+hash {
-		t.Errorf("line 2 is %q, want the version line", lines[1])
+	if lines[0] != "run "+hash {
+		t.Errorf("line 1 is %q, want the version line", lines[0])
 	}
 }
 

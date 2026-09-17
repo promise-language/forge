@@ -21,8 +21,9 @@ func TestTheDefinitionPassesTheLibrarysCheck(t *testing.T) {
 }
 
 // A bare invocation is malformed: nothing is written where a result goes, the
-// status says nothing was done, and the brief form says what is missing before
-// anything else (docs/command-line.md, Help and version).
+// status says nothing was done, and the brief form names the build, what is
+// missing, and where the full surface is (docs/command-line.md, Help and
+// version).
 func TestABareInvocationAnswersTheBriefForm(t *testing.T) {
 	root, hash := fitRepo(t)
 	out, errs, status := invoke(t, root, hash, nil, true)
@@ -34,23 +35,20 @@ func TestABareInvocationAnswersTheBriefForm(t *testing.T) {
 		t.Errorf("stdout %q, want it empty — a script must not read this as a result", out)
 	}
 	lines := strings.Split(strings.TrimRight(errs, "\n"), "\n")
-	if len(lines) != 4 {
+	if len(lines) != 3 {
 		t.Fatalf("the brief form is %d lines:\n%s", len(lines), errs)
 	}
-	if !strings.HasPrefix(lines[0], "expecting a subcommand:") {
-		t.Errorf("line 1 is %q, want what is missing first", lines[0])
+	if lines[0] != "gate "+hash {
+		t.Errorf("line 1 is %q, want the version line — a reader who stopped may hold the wrong build", lines[0])
 	}
-	if !strings.Contains(lines[0], "gate --list") {
-		t.Errorf("line 1 is %q, want it to name the invocation that lists the gates", lines[0])
+	if !strings.HasPrefix(lines[1], "expecting a subcommand:") {
+		t.Errorf("line 2 is %q, want what is missing", lines[1])
 	}
-	if lines[1] != "gate "+hash {
-		t.Errorf("line 2 is %q, want the version line", lines[1])
+	if !strings.Contains(lines[1], "gate --list") {
+		t.Errorf("line 2 is %q, want it to name the invocation that lists the gates", lines[1])
 	}
-	if lines[2] != "measure one property of this tree" {
-		t.Errorf("line 3 is %q, want what the binary is", lines[2])
-	}
-	if !strings.Contains(lines[3], "-help") {
-		t.Errorf("line 4 is %q, want the pointer to -help", lines[3])
+	if !strings.Contains(lines[2], "-help") {
+		t.Errorf("line 3 is %q, want the pointer to -help", lines[2])
 	}
 	// Not the whole vocabulary: the reader asked to do something and left a
 	// word out, and the full surface is one flag away.
@@ -166,8 +164,11 @@ func TestAMalformedInvocationIsRefusedBeforeAnyAction(t *testing.T) {
 		{"a mode flag on a contract-fixed command names the contract",
 			[]string{gate, "--envelope", "-human"}, []string{"gate-contract.md"}},
 		{"two modes are a contradiction", []string{"--list", "-json", "-human"}, []string{"-json and -human"}},
-		{"a flag after an argument is misplaced", []string{"--list", "extra", "-json"},
-			[]string{"is written after the argument"}},
+		// gate takes no positional argument, so a stray word is a command it
+		// does not have — and the flag written after it is where One order puts
+		// it, not a second problem to report.
+		{"a stray word is the command it is not", []string{"--list", "extra", "-json"},
+			[]string{"unknown command extra"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out, errs, status := invoke(t, root, hash, c.args, true)

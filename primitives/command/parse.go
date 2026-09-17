@@ -71,6 +71,13 @@ func parse(root *resolved, args []string, s Streams) *parsed {
 	var wantJSON, wantHuman bool
 	var jsonInput string
 	endOfFlags := false
+	// A flag is late only with respect to an argument the command actually
+	// takes. Where a command declares no positional parameter, the word that
+	// ended the path is itself the problem — an unknown command, or one
+	// argument more than the command takes — and the flag written after it is
+	// exactly where One order puts it. Reporting both would tell whoever typed
+	// `gate teste --envelope` to reorder an invocation whose order was right.
+	takesArguments := len(cur.params) > 0
 
 	for ; i < len(args); i++ {
 		a := args[i]
@@ -89,9 +96,11 @@ func parse(root *resolved, args []string, s Streams) *parsed {
 		// hands the rest through untouched has silently reinterpreted the
 		// invocation.
 		if len(positionals) > 0 {
-			p.problems = append(p.problems, fmt.Sprintf(
-				"-%s is written after the argument %q, and every flag comes before the positional arguments",
-				name, positionals[0]))
+			if takesArguments {
+				p.problems = append(p.problems, fmt.Sprintf(
+					"-%s is written after the argument %q, and every flag comes before the positional arguments",
+					name, positionals[0]))
+			}
 			if f := cur.flag(name); f != nil && f.Type != Boolean && !hasValue {
 				i++
 			}

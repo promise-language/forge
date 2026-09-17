@@ -191,19 +191,15 @@ so no hand-written usage text exists anywhere to drift from what a command accep
 help.**
 
 ```
-expecting a subcommand: setup, update, doctor
 workspace 4f2a91c
-the workspace that manages a fleet of checkouts
+expecting a subcommand: setup, update, doctor
 run `workspace -help` for all of them
 ```
 
-- **It opens with what is missing and the principal commands** that would satisfy it, which the
-  definition marks. The reader's question is what to type next, so it is answered on the first
-  line rather than after the build stamp. A tool that marks none names all of them, which is the
-  same answer while a tool is small.
 - **It names the binary and its version.** A reader who typed a name and stopped may also be
   holding the wrong build, and that costs one line.
-- **It says what the binary is**, in the one line the root's summary already carries.
+- **It names the principal commands**, which the definition marks. A tool that marks none names all
+  of them, which is the same answer while a tool is small.
 - **It ends at the pointer to `-help`**, the one place the full surface appears.
 - **It goes to stderr, with an empty stdout, and the invocation's status is 2.**
 

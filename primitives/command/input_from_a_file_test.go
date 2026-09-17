@@ -95,6 +95,14 @@ func TestInputFromAFile(t *testing.T) {
 
 		got = invoke(t, tool, []string{"-json-input", write(t, `{"args":["web"]}`), "web"}, Streams{})
 		got.says(t, "stderr", got.errs, "no precedence")
+
+		// The reserved flags are keys like any other, so the rule reaches them
+		// too rather than letting one of the two silently win.
+		got = invoke(t, tool, []string{"-json", "-json-input", write(t, `{"json":true}`)}, Streams{})
+		if got.status != StatusMalformed {
+			t.Errorf("status %d, want %d — a mode named twice is named both ways", got.status, StatusMalformed)
+		}
+		got.says(t, "stderr", got.errs, "-json", "no precedence")
 	})
 
 	t.Run("the file may not set json-input, and help means -help", func(t *testing.T) {

@@ -44,7 +44,14 @@ func TestTheCommandTree(t *testing.T) {
 		if got.out != "" {
 			t.Errorf("stdout %q, want it empty so a script cannot read it as a result", got.out)
 		}
-		got.says(t, "the brief form", got.errs, "expecting a subcommand:", "tool 9f1c2e7a", "do one thing", "-help")
+		got.says(t, "the brief form", got.errs, "expecting a subcommand:", "tool 9f1c2e7a", "-help")
+		// The build stamp is the first line: a reader who typed a name and
+		// stopped may also be holding the wrong build, and that is the first
+		// thing a bug report needs.
+		lines := strings.Split(strings.TrimRight(got.errs, "\n"), "\n")
+		if len(lines) != 3 || lines[0] != "tool 9f1c2e7a" {
+			t.Errorf("the brief form is:\n%s", got.errs)
+		}
 	})
 
 	t.Run("a flag may select the root's own action beside its children", func(t *testing.T) {
@@ -61,7 +68,6 @@ func TestTheCommandTree(t *testing.T) {
 	})
 
 	t.Run("a delegating child parses nothing after its name", func(t *testing.T) {
-		var handed []string
 		delegating := Tool{
 			Project: "tool",
 			Root: Command{
@@ -87,6 +93,5 @@ func TestTheCommandTree(t *testing.T) {
 		if strings.Contains(got.out, "Usage") {
 			t.Errorf("the delegating tool answered -help itself: %q", got.out)
 		}
-		_ = handed
 	})
 }
