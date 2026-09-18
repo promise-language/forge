@@ -65,7 +65,13 @@ func checkCommand(r *resolved, isRoot bool) []error {
 	if r.action == nil && len(r.children) == 0 && r.cmd.Children == nil && r.cmd.Delegate == nil {
 		problems = append(problems, fmt.Errorf("%s: neither children nor an action", where))
 	}
-	if r.cmd.Delegate != nil && len(r.flags) > 0 {
+	// A delegating command's own declaration is what the rule is about. A flag
+	// its parent attaches to every child is not something this command
+	// declared, and the parser returns at a delegating name without reading it,
+	// so a tool whose computed set holds both delegating and ordinary children
+	// — `run`, whose gates take --verdict and whose commands take their own
+	// arguments verbatim — is not made a defect by the flag its gates carry.
+	if r.cmd.Delegate != nil && len(r.cmd.Flags) > 0 {
 		problems = append(problems, fmt.Errorf("%s: a delegating command declares no flags — every word after its name belongs to the delegate", where))
 	}
 	if r.cmd.ChildClass != "" && r.cmd.EnumeratedBy == "" {
@@ -194,6 +200,12 @@ func denial(name string) string {
 	}
 	return "no-" + name
 }
+
+// ValidName reports whether s is a name in the guide's alphabet. It is exported
+// because the alphabet has one home: a caller deriving names from something
+// outside the definition — a directory under cmd/, a unit's path — asks here
+// rather than spelling the rule a second time.
+func ValidName(s string) bool { return validName(s) }
 
 // validName reports whether s is a name: lowercase ASCII letters and digits,
 // with - as the only separator within it (docs/org/cli-guide.md, Flag form).

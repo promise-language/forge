@@ -13,10 +13,21 @@ import (
 // set SourceHash covers when a caller names none.
 const ToolsBuildDir = "tools/build"
 
-// SourceHash computes an FNV-128a hash over every .go/go.mod/go.sum file under
-// each of dirs, which are slash-separated paths relative to repoRoot. It is
-// stable across runs and platforms, and is what the meta-builder bakes into
-// each binary to drive the staleness check.
+// SourceHash computes an FNV-128a hash over the tool source named by dirs,
+// which are slash-separated paths relative to repoRoot. It is stable across
+// runs and platforms, and is what the meta-builder bakes into each binary to
+// drive the staleness check.
+//
+// It covers every regular file whose name does not begin with ".". A .go-only
+// hash misses an embedded template, and a tool whose template changed while its
+// hash did not is exactly the state the check exists to prevent
+// (docs/project-tools.md, Make step 2).
+//
+// A directory named plainly is hashed as a tree. One named with a trailing
+// "/*" is hashed by the files directly in it, which is what a package
+// directory is: `go list` reports a package's own directory, and hashing its
+// subdirectories too would report a tool stale over a package it never
+// imported.
 //
 // Naming no directory means <repoRoot>/tools/build — the whole of a project's
 // tool source when the dependency on this library is a pinned version, because
@@ -40,16 +51,25 @@ func SourceHash(repoRoot string, dirs ...string) (string, error) {
 	// file once rather than twice.
 	files := map[string]string{}
 	for _, dir := range dirs {
-		base := filepath.Join(repoRoot, filepath.FromSlash(dir))
+		shallow := strings.HasSuffix(dir, "/*")
+		base := filepath.Join(repoRoot, filepath.FromSlash(strings.TrimSuffix(dir, "/*")))
 		err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
+			name := info.Name()
 			if info.IsDir() {
+				switch {
+				case path == base:
+					return nil
+				case shallow, strings.HasPrefix(name, "."):
+					// A dot directory holds no tool source, and a package
+					// directory's subdirectories are packages of their own.
+					return filepath.SkipDir
+				}
 				return nil
 			}
-			name := info.Name()
-			if !strings.HasSuffix(name, ".go") && name != "go.mod" && name != "go.sum" {
+			if strings.HasPrefix(name, ".") {
 				return nil
 			}
 			rel, err := filepath.Rel(repoRoot, path)

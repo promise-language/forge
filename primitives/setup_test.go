@@ -2,6 +2,7 @@ package primitives
 
 import (
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -25,11 +26,18 @@ func TestRunSetupWiresTheInRepoHooks(t *testing.T) {
 
 // Outside a checkout there is no config to write, and the caller is told rather
 // than left believing the hooks are wired.
+//
+// The ceiling is what makes the case reproducible. A project's tools point
+// TMPDIR inside the repository (docs/project-tools.md, Writes and processes),
+// so a temporary directory is itself inside a checkout and git walks up to it —
+// and the test would pass or fail on where the suite happened to be run from.
 func TestRunSetupOutsideACheckout(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
-	if err := RunSetup(t.TempDir()); err == nil {
+	outside := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(outside))
+	if err := RunSetup(outside); err == nil {
 		t.Error("wiring hooks outside a git checkout reported success")
 	}
 }
