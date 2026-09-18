@@ -155,6 +155,34 @@ func TestAFailingVerdictCarriesTheEvidenceAndTheRemediation(t *testing.T) {
 	}
 }
 
+// Under a floor the evidence is the unit that is short, and a unit at zero is
+// the strongest evidence there is. A judge that named only the units with a
+// number to show would point at the one that is fine and hide the one that is
+// not.
+func TestTheEvidenceUnderAFloorIsTheUnitThatIsShort(t *testing.T) {
+	root := t.TempDir()
+	terms(t, root, `{"statement_coverage": {"direction": "up", "cap": 75}}`, noBaselines)
+	read, _ := LoadTerms(root)
+
+	verdict, err := Judge(Envelope{
+		Gate:    "covered",
+		Metrics: []Measurement{Quantity("statement_coverage", 40, "percent")},
+		Groups: []Group{
+			{Name: "root", Metrics: []Measurement{Quantity("statement_coverage", 0, "percent")}},
+			{Name: "tools-build", Metrics: []Measurement{Quantity("statement_coverage", 91.5, "percent")}},
+		},
+	}, read, "cover what the change added")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(verdict.Detail, "root (0.0)") {
+		t.Errorf("detail = %q, want it to name the unit that is short of the floor", verdict.Detail)
+	}
+	if strings.Contains(verdict.Detail, "tools-build") {
+		t.Errorf("detail = %q, want it not to name a unit that is over the floor", verdict.Detail)
+	}
+}
+
 // Only verify moves a baseline, and only forward.
 func TestARatchetMovesOnlyForward(t *testing.T) {
 	root := t.TempDir()

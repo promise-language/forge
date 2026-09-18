@@ -140,8 +140,14 @@ func RunVerify(r *Run) (VerifyResult, error) {
 	}
 
 	result := VerifyResult{OK: true}
+	// A run stops for two reasons, and neither is a pass. A stage that failed
+	// ends the run; so does an interrupt, after the step it arrived during. What
+	// follows either is reported as not run — and a run with a stage nobody ran
+	// has not established that this tree may be committed, so it is not OK.
+	stopped := false
 	for _, stage := range r.project.Verify.Stages() {
-		if !result.OK || r.Interrupted() {
+		if stopped || r.Interrupted() {
+			stopped, result.OK = true, false
 			result.Stages = append(result.Stages, notRun(stage))
 			continue
 		}
@@ -149,12 +155,23 @@ func RunVerify(r *Run) (VerifyResult, error) {
 		fmt.Fprintf(r.Narrate, "==> %s\n", stage.Name)
 		// Within a stage every step runs and every failure is tallied: a
 		// project whose failures are independent learns about all of them in
-		// one round rather than one per round.
-		for _, step := range stage.Steps {
+		// one round rather than one per round. An interrupt is the exception —
+		// the first one ends the run after the current step.
+		for i, step := range stage.Steps {
 			reported.Steps = append(reported.Steps, runStep(r, step))
+			if r.Interrupted() {
+				for _, skipped := range stage.Steps[i+1:] {
+					reported.Steps = append(reported.Steps,
+						StepResult{Name: skipped.Name, Status: StatusNotRun})
+				}
+				break
+			}
 		}
 		for _, s := range reported.Steps {
-			if s.Status == StatusFailed {
+			switch s.Status {
+			case StatusFailed:
+				result.OK, stopped = false, true
+			case StatusNotRun:
 				result.OK = false
 			}
 		}

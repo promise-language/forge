@@ -148,6 +148,50 @@ func TestAFailedPreparationMakesThePartIncompleteRatherThanZero(t *testing.T) {
 	}
 }
 
+// A composition declares a preparation the same way a leaf does — building the
+// compiler its parts measure with is exactly that gate — and a preparation the
+// definition asked for and the run never performed is one the parts then measure
+// without.
+func TestACompositionsPreparationRuns(t *testing.T) {
+	root := fixture(t, "")
+	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 0, "")}}, nil)
+	g, _ := p.Gates.Get(Integration)
+	ran := 0
+	g.Prepare = func(*Run) error { ran++; return nil }
+	p.Gates.Add(g)
+
+	if _, err := MeasureGate(quiet(p, root), Integration); err != nil {
+		t.Fatal(err)
+	}
+	if ran != 1 {
+		t.Errorf("the composition's preparation ran %d times, want once", ran)
+	}
+}
+
+// One metric name is reported once in one envelope, and a composition is where
+// two parts can each report it. The whole is checked against what it declares
+// for the same reason a leaf is: a name carried twice is two measurements under
+// one term, and the term would mean whichever part the judge read last.
+func TestACompositionCannotReportOneNameTwice(t *testing.T) {
+	root := fixture(t, "")
+	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 1, "")}}, nil)
+	p.Gates.Add(Gate{
+		Name:    "y",
+		Summary: "a second part reporting the same name",
+		Metrics: Declared(Count("n")),
+		Measure: func(*Run, []Unit) (Measured, error) {
+			return Measured{Metrics: []Measurement{Counted("n", 2, "")}}, nil
+		},
+		Remediation: "there is nothing to do about a fixture",
+	})
+	p.Integration("x", "y")
+
+	_, err := MeasureGate(quiet(p, root), Integration)
+	if err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("err = %v, want a composition carrying one name twice to be refused", err)
+	}
+}
+
 // The envelope carries the host's os/arch as its target, unless the gate
 // declared one for the instance it measured.
 func TestTheEnvelopeCarriesATarget(t *testing.T) {

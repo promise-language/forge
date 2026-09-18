@@ -144,8 +144,10 @@ func RunTool(p Project, stamp string) Entry {
 					}
 					if refusal != nil {
 						// A refusal from a child is relayed, not
-						// reinterpreted.
-						return nil, refusedBy(refusal)
+						// reinterpreted: it travels back as the refusal
+						// object the child gave, and the library answers
+						// with the refusal status.
+						return nil, refusal
 					}
 					return judged, nil
 				})
@@ -266,12 +268,6 @@ func defectsIn(defects []error) error {
 	}
 	return fmt.Errorf("this project's tooling definition has %d defect(s):\n  %s",
 		len(defects), strings.Join(lines, "\n  "))
-}
-
-// refusedBy turns a child's refusal into this tool's own. The condition and the
-// recovery are the child's; what carries them is the library's.
-func refusedBy(r *command.Refusal) error {
-	return fmt.Errorf("%s: %s — run %s", r.Tool, r.Detail, strings.Join(r.Recovery, " "))
 }
 
 // inspect is a run that only reads. It makes no scratch and takes no signals,

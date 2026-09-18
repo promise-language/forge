@@ -210,7 +210,7 @@ func Judge(env Envelope, terms Terms, remediation string) (Verdict, error) {
 			term.Direction, term.Cap, judged = c.Direction, c.Cap, true
 			if beyond(m.Number(), *c.Cap, c.Direction) {
 				failures = append(failures, fmt.Sprintf("%s is %s, cap %s%s",
-					m.Name, m, number(*c.Cap), where(env, m.Name)))
+					m.Name, m, number(*c.Cap), where(env, m.Name, *c.Cap, c.Direction)))
 			}
 		}
 		if b, ok := terms.Baselines[m.Name]; ok {
@@ -222,7 +222,7 @@ func Judge(env Envelope, terms Terms, remediation string) (Verdict, error) {
 				term.Direction, term.Baseline, judged = b.Direction, &value, true
 				if beyond(m.Number(), floor, b.Direction) {
 					failures = append(failures, fmt.Sprintf("%s is %s, baseline %s%s",
-						m.Name, m, number(floor), where(env, m.Name)))
+						m.Name, m, number(floor), where(env, m.Name, floor, b.Direction)))
 				}
 			}
 		}
@@ -283,11 +283,11 @@ func whole(m Measurement, term float64, kind string) error {
 // where names the units a metric's number came from, out of the envelope's own
 // groups. A judge handed no evidence says it was handed none, rather than
 // supplying a plausible cause for a measurement it did not take.
-func where(env Envelope, metric string) string {
+func where(env Envelope, metric string, term float64, d Direction) string {
 	var named []string
 	for _, g := range env.Groups {
 		for _, m := range g.Metrics {
-			if m.Name != metric || m.Number() == 0 {
+			if m.Name != metric || !contributed(m.Number(), term, d) {
 				continue
 			}
 			named = append(named, fmt.Sprintf("%s (%s)", g.Name, m))
@@ -297,6 +297,21 @@ func where(env Envelope, metric string) string {
 		return ""
 	}
 	return ", in " + strings.Join(named, " and ")
+}
+
+// contributed reports whether one unit's number is part of why the whole is
+// beyond its term, which is what makes it evidence rather than noise.
+//
+// A ceiling is a bound on things counted, and the counts sum: a unit that
+// counted none contributed none, and naming it points at a unit with nothing
+// wrong. A floor is not a sum — statement coverage is one ratio over every
+// unit — so what explains a shortfall is the unit that is itself short, and a
+// unit at zero is the strongest evidence there is rather than the weakest.
+func contributed(value, term float64, d Direction) bool {
+	if d == Down {
+		return value != 0
+	}
+	return beyond(value, term, d)
 }
 
 func number(v float64) string {

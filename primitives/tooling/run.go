@@ -140,17 +140,12 @@ func MeasureAndJudge(r *Run, name string) (Judged, *command.Refusal, error) {
 	// printed afterwards. Gates run for minutes, and a gate that is working and
 	// a gate that is wedged produce the same thing (nothing) for as long as the
 	// output is held.
-	out, status, err := r.child(binary, name, "--envelope")
+	out, status, err := r.child(r.Narrate, binary, name, "--envelope")
 	if err != nil {
 		return Judged{}, nil, fmt.Errorf("%s did not run: %w", name, err)
 	}
 	if status == command.StatusRefused {
-		return Judged{}, &command.Refusal{
-			Refusal:  command.Stale,
-			Tool:     "gate",
-			Detail:   "the gate declined to run, so nothing about this tree was measured",
-			Recovery: primitives.Recovery(),
-		}, nil
+		return Judged{}, childRefusal(r, binary), nil
 	}
 
 	var env Envelope
@@ -165,6 +160,34 @@ func MeasureAndJudge(r *Run, name string) (Judged, *command.Refusal, error) {
 	}
 	judged, err := judgeEnvelope(r, name, env)
 	return judged, nil, err
+}
+
+// childRefusal is the refusal a child gave, read from that child rather than
+// guessed at. A refusal from a child is relayed, not reinterpreted — and a
+// runner that named one condition where the child named another would send a
+// person to the wrong repair.
+//
+// It takes a second invocation because the first one claimed stdout for the gate
+// contract, and under that contract a refusal writes nothing there at all. Every
+// other mode writes the object, so the refusing binary is asked once more in one
+// of those; -version is the invocation that asks nothing of the tree, and a
+// binary unfit to act refuses it exactly as it refused the measurement.
+func childRefusal(r *Run, binary string) *command.Refusal {
+	out, status, err := r.child(io.Discard, binary, "-version", "-json")
+	if err == nil && status == command.StatusRefused {
+		var relayed command.Refusal
+		if json.Unmarshal([]byte(out), &relayed) == nil && relayed.Refusal != "" {
+			return &relayed
+		}
+	}
+	// It declined and would not say why. That is still a refusal — nothing about
+	// this tree was measured — and the recovery is the one every refusal names.
+	return &command.Refusal{
+		Refusal:  command.Stale,
+		Tool:     filepath.Base(binary),
+		Detail:   "the gate declined to run and did not say why, so nothing about this tree was measured",
+		Recovery: primitives.Recovery(),
+	}
 }
 
 // JudgeStdin judges an envelope this program did not produce.
@@ -229,16 +252,24 @@ func render(env Envelope, terms Terms) string {
 		}
 	}
 	for _, m := range env.Metrics {
-		judged, mark := "not judged", " "
+		// Every term a metric has is applied, and every one must hold, so every
+		// one is printed. A metric with both a cap and a baseline shown beside
+		// only one of them reads as judged by that one alone.
+		var applied []string
+		within := true
 		if c, ok := terms.Caps[m.Name]; ok {
-			judged = fmt.Sprintf("cap %s %s", c.Direction, number(*c.Cap))
-			mark = passed(!beyond(m.Number(), *c.Cap, c.Direction))
+			applied = append(applied, fmt.Sprintf("cap %s %s", c.Direction, number(*c.Cap)))
+			within = within && !beyond(m.Number(), *c.Cap, c.Direction)
 		}
-		if b, ok := terms.Baselines[m.Name]; ok {
-			if floor, recorded := b.For(env.Target); recorded {
-				judged = fmt.Sprintf("baseline %s %s", b.Direction, number(floor))
-				mark = passed(!beyond(m.Number(), floor, b.Direction))
+		if base, ok := terms.Baselines[m.Name]; ok {
+			if floor, recorded := base.For(env.Target); recorded {
+				applied = append(applied, fmt.Sprintf("baseline %s %s", base.Direction, number(floor)))
+				within = within && !beyond(m.Number(), floor, base.Direction)
 			}
+		}
+		judged, mark := "not judged", " "
+		if len(applied) > 0 {
+			judged, mark = strings.Join(applied, ", "), passed(within)
 		}
 		fmt.Fprintf(&b, "  %-*s  %10s  %-24s %s\n", width, m.Name, m.String()+unitSuffix(m.Unit), judged, mark)
 	}

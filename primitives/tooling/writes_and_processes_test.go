@@ -111,6 +111,21 @@ func TestProgressNamesTheUnitAndTheCommand(t *testing.T) {
 	if strings.Contains(narrated.String(), root) {
 		t.Errorf("narration carries an absolute path: %q", narrated.String())
 	}
+
+	// Including where the argument itself is a path this run made. A coverage
+	// profile and a build output are scratch, handed to the child absolute
+	// because it runs in its unit's directory — and a progress line that
+	// repeated that spelling would name the reader's home directory rather than
+	// anything about this repository.
+	// What git makes of the argument is beside the point; the progress line is
+	// written before the child runs.
+	r.Value(units[0], "git", "rev-parse", "--git-dir", r.Scratch("cover.out"))
+	if strings.Contains(narrated.String(), root) {
+		t.Errorf("a scratch argument was narrated absolute: %q", narrated.String())
+	}
+	if !strings.Contains(narrated.String(), filepath.ToSlash(filepath.Join(ScratchDir))) {
+		t.Errorf("narration lost the scratch path entirely: %q", narrated.String())
+	}
 }
 
 // The bound keeps a first and a last segment and says how much it dropped.
@@ -150,6 +165,26 @@ func TestACaptureThatFitIsUnchanged(t *testing.T) {
 	}
 	if w.Overflowed() {
 		t.Error("a stream inside the bound reported an overflow")
+	}
+}
+
+// A stream longer than the head segment and no longer than the bound is still a
+// stream that fit, and it comes back whole. This is the band a child actually
+// lands in — `go test -json` over a large module writes megabytes — and a
+// capture that returned the head alone here would drop records off a stream a
+// measurement counts, while reporting no overflow for the envelope to call
+// itself incomplete over.
+func TestACaptureBetweenTheHeadAndTheBoundIsStillWhole(t *testing.T) {
+	for _, n := range []int{51, 99, 100} {
+		w := newSegmented(100)
+		body := strings.Repeat("r", n-1) + "!"
+		w.Write([]byte(body))
+		if got := w.String(); got != body {
+			t.Errorf("%d bytes into a bound of 100 came back as %d: %q", n, len(got), got)
+		}
+		if w.Overflowed() || w.Dropped() != 0 {
+			t.Errorf("%d bytes into a bound of 100 reported an overflow", n)
+		}
 	}
 }
 

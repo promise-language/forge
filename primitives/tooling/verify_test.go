@@ -174,6 +174,52 @@ func TestARedRunBlessesNothing(t *testing.T) {
 	}
 }
 
+// The first interrupt ends the run after the current step, and an interrupted
+// run is not a pass. Nothing it skipped was measured, so reporting it green
+// would tell a person a tree is safe to commit on the strength of the stages
+// that happened to run before they pressed a key.
+func TestAnInterruptedRunIsNotAPass(t *testing.T) {
+	root := fixture(t, "")
+	terms(t, root, `{}`, `{}`)
+
+	ran := map[string]bool{}
+	p := Standard()
+	p.Verify = Pipeline{}
+	p.Verify.AddStage(Stage{Name: "measure", Steps: []Step{
+		{Name: "one", Run: func(r *Run) error {
+			r.mu.Lock()
+			r.interrupted = true
+			r.mu.Unlock()
+			return nil
+		}},
+		passing("two", ran),
+	}})
+	p.Verify.AddStage(Stage{Name: StageRecord, Steps: []Step{{Name: "tree", Run: recordStep}}})
+
+	r, _ := run(t, p, root)
+	got, err := RunVerify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OK || got.ExitStatus() != 1 {
+		t.Errorf("an interrupted run reported ok=%v, status %d", got.OK, got.ExitStatus())
+	}
+	if ran["two"] {
+		t.Error("the run did not end after the step the interrupt arrived during")
+	}
+	if got.Tree != "" {
+		t.Errorf("an interrupted run blessed %q", got.Tree)
+	}
+	for _, stage := range got.Stages {
+		for _, s := range stage.Steps {
+			if s.Name != "one" && s.Status != StatusNotRun {
+				t.Errorf("%s/%s is %q, want every step after the interrupt reported as not run",
+					stage.Name, s.Name, s.Status)
+			}
+		}
+	}
+}
+
 // A green run records the tree `git add -A` would stage, and the record is the
 // one the workspace's commit guard reads.
 func TestAGreenRunRecordsTheTreeGitAddWouldStage(t *testing.T) {

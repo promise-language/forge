@@ -79,6 +79,14 @@ func Run(t Tool, args []string, s Streams) int {
 
 	result, err := p.cmd.action(p.call)
 	if err != nil {
+		// An action that could not act because something it depends on declined
+		// answers with that refusal, not with a failure: a tool exiting 1 over a
+		// stale child has not examined the subject, and a caller must be able to
+		// tell the two apart without reading prose.
+		var refusal *Refusal
+		if errors.As(err, &refusal) {
+			return writeRefusal(t, refusal, args, s)
+		}
 		fmt.Fprintf(s.Err, "%s: %v\n", t.Project, err)
 		return StatusFailed
 	}

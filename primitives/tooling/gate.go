@@ -242,16 +242,32 @@ func MeasureGate(r *Run, name string) (Envelope, error) {
 		env.Target = g.Target
 	}
 
-	if len(g.Parts) > 0 {
-		return composition(r, env, g)
-	}
-
+	// The preparation comes before the split: a composition may declare one just
+	// as a leaf may — building the compiler its parts measure with is exactly
+	// that gate — and one it never ran is one the definition asked for and did
+	// not get.
 	if reason := prepared(r, g); reason != "" {
 		// A preparation's failure makes every dependent part incomplete, with
 		// the reason. It never produces a measurement of zero.
 		env.Incomplete = reason
 		return env, nil
 	}
+
+	if len(g.Parts) > 0 {
+		env, err := composition(r, env, g)
+		if err != nil {
+			return Envelope{}, err
+		}
+		// Its metrics are its parts' metrics — so the same check a leaf's
+		// measurements face applies here, and two parts reporting one name is
+		// caught where it would otherwise reach an envelope carrying that name
+		// twice.
+		if err := declares(env, declaredMetrics(r, g, subject)); err != nil {
+			return Envelope{}, fmt.Errorf("gate %q: %w", name, err)
+		}
+		return env, nil
+	}
+
 	if g.Measure == nil {
 		return Envelope{}, fmt.Errorf("gate %q neither measures nor composes", name)
 	}

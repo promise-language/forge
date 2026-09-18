@@ -205,7 +205,7 @@ func (r *Run) Attached(u Unit, name string, args ...string) error {
 // spawn runs one child under the run's context, in its own process group, with
 // its scratch and its cache pointed inside the checkout.
 func (r *Run) spawn(u Unit, out, errs io.Writer, extraEnv []string, name string, args ...string) error {
-	fmt.Fprintf(r.Narrate, "==> %s %s %s\n", u.Label(), name, strings.Join(args, " "))
+	fmt.Fprintf(r.Narrate, "==> %s %s %s\n", u.Label(), name, r.relative(strings.Join(args, " ")))
 	cmd := exec.CommandContext(r.ctx, name, args...)
 	cmd.Dir = r.Abs(u.Dir)
 	cmd.Stdout = out
@@ -220,6 +220,16 @@ func (r *Run) spawn(u Unit, out, errs io.Writer, extraEnv []string, name string,
 	err := cmd.Wait()
 	r.untrack(cmd)
 	return err
+}
+
+// relative re-roots what a progress line says about a path. A child is handed
+// absolute paths — a coverage profile in this run's scratch, a build output —
+// because it runs in its unit's directory and an absolute path is the only
+// spelling that means the same thing there. What a person reads is the other
+// question: a progress line naming the reader's home directory says nothing
+// about this repository, and the same line differs on every machine.
+func (r *Run) relative(line string) string {
+	return strings.ReplaceAll(line, r.Root+string(os.PathSeparator), "")
 }
 
 // childEnv is the environment every child is told to write inside the checkout
@@ -362,12 +372,16 @@ func (r *Run) gitOutput(args ...string) (string, error) {
 // refusal is a status a caller relays, not a failure it reinterprets: a tool
 // that declined to run measured nothing, and "exit 3" and "it went wrong" are
 // different facts about the tree.
-func (r *Run) child(name string, args ...string) (string, int, error) {
+// The child's stderr goes where the caller says: onto the narration for the
+// invocation a person is watching, and discarded for the second, silent
+// invocation that asks a refusing child what its refusal was — which would
+// otherwise print the same line twice.
+func (r *Run) child(errs io.Writer, name string, args ...string) (string, int, error) {
 	captured := newSegmented(MaxChildOutput)
 	cmd := exec.CommandContext(r.ctx, name, args...)
 	cmd.Dir = r.Root
 	cmd.Stdout = captured
-	cmd.Stderr = r.Narrate
+	cmd.Stderr = errs
 	cmd.Env = r.childEnv()
 	setProcessGroup(cmd)
 
@@ -468,9 +482,14 @@ func (s *segmented) Write(p []byte) (int, error) {
 
 // String is what was kept: the whole of a stream that fit, or the first and the
 // last segment with a line between them saying how much fell out.
+//
+// A stream that fit is head and tail joined, not head alone. The head stops at
+// half the bound, so everything past that point is in the tail — and returning
+// the head by itself would truncate a stream that was never over the bound, with
+// nothing reporting that it had been.
 func (s *segmented) String() string {
 	if !s.Overflowed() {
-		return string(s.head)
+		return string(s.head) + string(s.tail)
 	}
 	return fmt.Sprintf("%s\n... %d bytes dropped between the first and last %d bytes ...\n%s",
 		s.head, s.Dropped(), s.max/2, s.tail)

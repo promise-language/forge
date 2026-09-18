@@ -39,6 +39,19 @@ type Refusal struct {
 	Recovery []string `json:"recovery"`
 }
 
+// Error makes a refusal something an action can return, so that a tool which
+// learns only while acting that it cannot act — a runner whose gate declined —
+// refuses rather than failing. Run tells the two apart by the type and not by
+// the text: a refusal reaches the caller as the refusal object and the refusal
+// status, whichever layer produced it.
+func (r *Refusal) Error() string {
+	line := fmt.Sprintf("%s: %s", r.Tool, r.Detail)
+	if len(r.Recovery) > 0 {
+		line += " — run " + strings.Join(r.Recovery, " ")
+	}
+	return line
+}
+
 // writeRefusal answers an invocation the binary declined, and returns the
 // refusal status.
 //

@@ -3,11 +3,13 @@
 package tooling
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/promise-language/forge/primitives"
 	"github.com/promise-language/forge/primitives/command"
 )
 
@@ -86,6 +88,69 @@ func TestTheRunnerCrossesTheProcessBoundary(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A refusal from a child is relayed, not reinterpreted: the condition the child
+// named is the condition the runner reports, and a runner that substituted one
+// of its own would send a person to a repair that is not the repair.
+//
+// The measuring invocation claims stdout for the gate contract and so carries no
+// refusal object; the runner asks the refusing binary again in a mode that does
+// write one.
+func TestAChildsOwnConditionIsWhatTheRunnerReports(t *testing.T) {
+	root := fixture(t, "")
+	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	standIn(t, root, `case "$*" in
+  *-version*) printf '%s' '{"refusal":"unstamped","tool":"gate","detail":"this binary carries no stamp","recovery":["./make"]}' ;;
+esac
+exit 3`)
+	p := counting("x", []Metric{Count("n")}, Measured{}, nil)
+
+	r, _ := run(t, p, root)
+	_, refusal, err := MeasureAndJudge(r, "x")
+	if err != nil {
+		t.Fatalf("a refusal came back as an error: %v", err)
+	}
+	if refusal == nil {
+		t.Fatal("a gate that declined to run was not relayed as a refusal")
+	}
+	if refusal.Refusal != command.Unstamped {
+		t.Errorf("refusal = %q, want the child's own %q rather than a condition the runner invented",
+			refusal.Refusal, command.Unstamped)
+	}
+}
+
+// And the whole tool answers with it: a refusal is not a failure, so `run
+// <gate>` against a gate that declined exits with the refusal status and writes
+// the refusal object, rather than reporting the tree as bad.
+func TestTheRunnerAnswersAChildsRefusalWithTheRefusalStatus(t *testing.T) {
+	root := fixture(t, "")
+	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	write(t, root, filepath.FromSlash("tools/build/cmd/gate/main.go"), "package main\n")
+	standIn(t, root, "exit 3")
+	git(t, root, "add", "-A")
+
+	hash, err := primitives.SourceHash(root, "tools/build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := Stamp{Root: root, Hash: hash, Dirs: []string{"tools/build"}}.Encode()
+
+	var out, errs strings.Builder
+	status := RunTool(counting("x", []Metric{Count("n")}, Measured{}, nil), stamp).RunWith(
+		[]string{"x"}, command.Streams{Out: &out, Err: &errs, Dir: root})
+
+	if status != command.StatusRefused {
+		t.Errorf("status = %d, want %d — a child's refusal reported as a failure claims the tree was examined",
+			status, command.StatusRefused)
+	}
+	var relayed command.Refusal
+	if err := json.Unmarshal([]byte(out.String()), &relayed); err != nil {
+		t.Fatalf("stdout carries no refusal object (%v): %q", err, out.String())
+	}
+	if len(relayed.Recovery) == 0 {
+		t.Errorf("the relayed refusal names no recovery: %+v", relayed)
 	}
 }
 
