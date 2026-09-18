@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/promise-language/forge/primitives/command"
 )
 
 // fixtureGate is a gate a test adds, with everything Check requires of one.
@@ -180,6 +182,51 @@ func TestEveryDefectInADefinitionIsNamed(t *testing.T) {
 				t.Errorf("the defects are %v, want one saying %q", said, c.says)
 			}
 		})
+	}
+}
+
+// Every tool validates the definition before it acts, and a tool whose
+// definition has a defect refuses to run with status 1, naming every defect.
+// -help and -version still answer, because they describe the binary rather than
+// act on the tree.
+func TestAToolWithADefectiveDefinitionRefusesToActAndStillDescribesItself(t *testing.T) {
+	root := fixture(t, "")
+	stamp := stamped(t, root)
+
+	// Two defects the command tree cannot see for itself. A gate whose *name* is
+	// outside the alphabet is refused a layer earlier, by the library's own tree
+	// check, which takes -help with it — help is generated from the tree, so a
+	// malformed tree has nothing trustworthy to answer with.
+	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 0, "")}}, nil)
+	p.Gates.Remove(Fit)
+	unremedied := fixtureGate("size")
+	unremedied.Remediation = ""
+	p.Gates.Add(unremedied)
+
+	var out, errs strings.Builder
+	status := GateTool(p, stamp).RunWith([]string{"x", "--envelope"},
+		command.Streams{Out: &out, Err: &errs, Dir: root})
+	if status != command.StatusFailed {
+		t.Errorf("status = %d, want %d", status, command.StatusFailed)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a tool that would not act wrote %q to stdout", out.String())
+	}
+	// Every defect, not the first one: a definition wrong in two ways should not
+	// need two runs to say so.
+	for _, says := range []string{`"fit" is absent`, "states no remediation"} {
+		if !strings.Contains(errs.String(), says) {
+			t.Errorf("stderr = %q, want it to say %q", errs.String(), says)
+		}
+	}
+
+	var helpOut, helpErr strings.Builder
+	if status := GateTool(p, stamp).RunWith([]string{"-help"},
+		command.Streams{Out: &helpOut, Err: &helpErr, Dir: root}); status != command.StatusDone {
+		t.Errorf("-help exited %d against a defective definition (%s)", status, helpErr.String())
+	}
+	if helpOut.Len() == 0 {
+		t.Error("-help answered with nothing")
 	}
 }
 

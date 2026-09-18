@@ -114,4 +114,31 @@ func TestAJudgedMeasurementPrintsBesideItsTerms(t *testing.T) {
 	}
 }
 
+// What `run <gate>` puts in front of a person: the measurements beside their
+// terms, and — only where the verdict was not acceptable — the detail that says
+// what to do about it. A passing run that printed a detail would read as a
+// finding; a failing one that did not would send the reader back to the gate.
+func TestAJudgedResultCarriesItsDetailOnlyWhenItFailed(t *testing.T) {
+	judged := Judged{
+		rendered: "  failed_tests  2  cap down 0  ✗\n",
+		Verdict:  Verdict{Acceptable: false, Detail: "failed_tests is 2, cap 0, in root (2). Fix the failing tests."},
+	}
+	var failing strings.Builder
+	if err := judged.Human(&failing); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(failing.String(), "cap down 0") || !strings.Contains(failing.String(), "Fix the failing tests") {
+		t.Errorf("a failing result reads %q, want the measurement and the detail", failing.String())
+	}
+
+	judged.Verdict = Verdict{Acceptable: true, Detail: "every judged measurement is within its term"}
+	var passing strings.Builder
+	if err := judged.Human(&passing); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(passing.String(), "within its term") {
+		t.Errorf("a passing result reads %q, want no detail to read as a finding", passing.String())
+	}
+}
+
 func ptr(v float64) *float64 { return &v }

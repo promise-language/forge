@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promise-language/forge/primitives"
 )
 
 // The tests in this package are one file per section of docs/project-tools.md,
@@ -41,6 +43,19 @@ func fixture(t *testing.T, units ...string) string {
 	git(t, root, "config", "user.name", "u")
 	git(t, root, "add", "-A")
 	return root
+}
+
+// stamped is the link-time stamp a tool built in this fixture would carry, so a
+// test can reach an entry point's action rather than its staleness refusal.
+func stamped(t *testing.T, root string) string {
+	t.Helper()
+	write(t, root, filepath.FromSlash("tools/build/cmd/gate/main.go"), "package main\n")
+	git(t, root, "add", "-A")
+	hash, err := primitives.SourceHash(root, primitives.ToolsBuildDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Stamp{Root: root, Hash: hash, Dirs: []string{primitives.ToolsBuildDir}}.Encode()
 }
 
 // terms writes both term files into a fixture.

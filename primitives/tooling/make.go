@@ -87,13 +87,25 @@ func SourceSet(r *Run) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("asking go list what the tools import from a local replace: %w", err)
 	}
+	// go list reports a directory with every symlink resolved, and a root need
+	// not be spelled that way — /var is a symlink on macOS, and a checkout
+	// reached through one would make every replace target look like a path
+	// outside the repository. The two are compared resolved, so what decides
+	// whether a package is this repository's is where it is and not how it was
+	// spelled. A root that cannot be resolved is used as it was given, which is
+	// the reading that changes nothing where there is no symlink to see through.
+	root := r.Root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
 	seen := map[string]bool{}
 	for line := range strings.SplitSeq(out, "\n") {
 		dir := strings.TrimSpace(line)
 		if dir == "" {
 			continue
 		}
-		rel, err := filepath.Rel(r.Root, dir)
+		rel, err := filepath.Rel(root, dir)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			// A replace pointing outside the repository is not this
 			// repository's source, and hashing it would make every binary's

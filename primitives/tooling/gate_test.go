@@ -1,9 +1,15 @@
 package tooling
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 )
 
 // --list names every concept and every instance, sorted, each with what it
@@ -35,6 +41,100 @@ func TestTheListingNamesEveryConceptAndEveryInstance(t *testing.T) {
 		if len(g.Metrics) == 0 {
 			t.Errorf("%q declares no metric, so a reader cannot tell what it will report", g.Name)
 		}
+	}
+}
+
+// What each invocation writes and what it exits with, as the document tabulates
+// it. The measurement is written only with --envelope: a bare run that printed
+// measurements and exited 0 would be read as a pass by the first script that
+// wrapped it, and a gate has no verdict to give.
+func TestTheGateSurfaceIsWhatTheDocumentTabulates(t *testing.T) {
+	root := fixture(t, "")
+	stamp := stamped(t, root)
+	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 0, "")}}, nil)
+
+	for _, c := range []struct {
+		name   string
+		args   []string
+		status int
+		stdout func(*testing.T, string)
+		stderr string
+	}{
+		{
+			name:   "a measurement, with --envelope",
+			args:   []string{"x", "--envelope"},
+			status: command.StatusDone,
+			stdout: func(t *testing.T, body string) {
+				var env Envelope
+				if err := json.Unmarshal([]byte(body), &env); err != nil {
+					t.Fatalf("stdout is not an envelope (%v): %q", err, body)
+				}
+				if env.Gate != "x" {
+					t.Errorf("the envelope names %q, want the gate that measured it", env.Gate)
+				}
+			},
+		},
+		{
+			name:   "without --envelope, nothing on stdout and the invocation refused",
+			args:   []string{"x"},
+			status: command.StatusMalformed,
+			stdout: func(t *testing.T, body string) {
+				if body != "" {
+					t.Errorf("stdout carries %q, want nothing a script could read as a pass", body)
+				}
+			},
+			stderr: "run x",
+		},
+		{
+			name:   "--list, as an object a program reads",
+			args:   []string{"--list", "-json"},
+			status: command.StatusDone,
+			stdout: func(t *testing.T, body string) {
+				var listing Listing
+				if err := json.Unmarshal([]byte(body), &listing); err != nil {
+					t.Fatalf("stdout is not a listing (%v): %q", err, body)
+				}
+				for _, g := range listing.Gates {
+					if g.Name == "x" {
+						return
+					}
+				}
+				t.Errorf("the listing does not name the gate this project answers: %q", body)
+			},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var out, errs strings.Builder
+			status := GateTool(p, stamp).RunWith(c.args,
+				command.Streams{Out: &out, Err: &errs, Dir: root})
+			if status != c.status {
+				t.Errorf("status = %d, want %d (stderr: %s)", status, c.status, errs.String())
+			}
+			c.stdout(t, out.String())
+			if c.stderr != "" && !strings.Contains(errs.String(), c.stderr) {
+				t.Errorf("stderr = %q, want it to say %q", errs.String(), c.stderr)
+			}
+		})
+	}
+}
+
+// A measurement that could not be taken writes no envelope. A partial one is not
+// a measurement and must not parse as one, so stdout stays empty and the status
+// says nothing about this tree was established.
+func TestAGateThatCouldNotMeasureWritesNoEnvelope(t *testing.T) {
+	root := fixture(t, "")
+	stamp := stamped(t, root)
+	p := counting("x", []Metric{Count("n")}, Measured{}, errTest)
+
+	var out, errs strings.Builder
+	status := GateTool(p, stamp).RunWith([]string{"x", "--envelope"},
+		command.Streams{Out: &out, Err: &errs, Dir: root})
+
+	if status != command.StatusFailed {
+		t.Errorf("status = %d, want %d when nothing could be measured", status, command.StatusFailed)
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout carries %q, want nothing for a runner to parse as a measurement", out.String())
 	}
 }
 
@@ -189,6 +289,84 @@ func TestACompositionCannotReportOneNameTwice(t *testing.T) {
 	_, err := MeasureGate(quiet(p, root), Integration)
 	if err == nil || !strings.Contains(err.Error(), "twice") {
 		t.Errorf("err = %v, want a composition carrying one name twice to be refused", err)
+	}
+}
+
+// fit:toolchain counts the toolchains with units in this repository whose
+// program does not run. A toolchain with no units contributes nothing, so a
+// Go-only checkout is fit on a machine that has never heard of Promise — and
+// the same machine is not, the moment a Promise unit is tracked.
+func TestFitToolchainCountsOnlyTheToolchainsWithUnits(t *testing.T) {
+	if primitives.Which("promise") != "" {
+		t.Skip("this machine has promise, so its absence cannot be measured")
+	}
+
+	goOnly := fixture(t, "")
+	r, _ := run(t, Standard(), goOnly)
+	env, err := MeasureGate(r, FitToolchain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := missing(t, env); got != 0 {
+		t.Errorf("missing_toolchains = %d in a Go-only checkout, want a toolchain with no units to count for nothing", got)
+	}
+
+	alsoPromise := fixture(t, "")
+	write(t, alsoPromise, filepath.FromSlash("app/promise.toml"), "")
+	git(t, alsoPromise, "add", "-A")
+	r2, narrated := run(t, Standard(), alsoPromise)
+	env2, err := MeasureGate(r2, FitToolchain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := missing(t, env2); got != 1 {
+		t.Errorf("missing_toolchains = %d with a Promise unit tracked, want 1", got)
+	}
+	if !strings.Contains(narrated.String(), "promise") {
+		t.Errorf("the measurement did not name what is missing: %q", narrated.String())
+	}
+}
+
+func missing(t *testing.T, env Envelope) int64 {
+	t.Helper()
+	for _, m := range env.Metrics {
+		if m.Name == "missing_toolchains" {
+			return m.Int
+		}
+	}
+	t.Fatalf("the envelope reports no missing_toolchains: %+v", env.Metrics)
+	return 0
+}
+
+// fit:disk reports both filesystems every run, even before either directory
+// exists. fit runs on exactly the fresh machine — the one that has not written
+// a cache yet — and an envelope whose shape varied by host is one no term can be
+// written against.
+func TestFitDiskReportsBothFilesystemsBeforeTheCacheExists(t *testing.T) {
+	root := fixture(t, "")
+	r, _ := run(t, Standard(), root)
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(CacheDir))); !os.IsNotExist(err) {
+		t.Fatalf("the fixture already holds a cache directory: %v", err)
+	}
+
+	env, err := MeasureGate(r, FitDisk)
+	if err != nil {
+		t.Fatalf("free space could not be measured where the cache does not exist yet: %v", err)
+	}
+	for _, want := range []string{"worktree_free_bytes", "cache_free_bytes"} {
+		found := false
+		for _, m := range env.Metrics {
+			if m.Name != want {
+				continue
+			}
+			found = true
+			if m.Int <= 0 || m.Unit != "bytes" {
+				t.Errorf("%s = %d %q, want a positive count of bytes", want, m.Int, m.Unit)
+			}
+		}
+		if !found {
+			t.Errorf("the envelope does not report %s: %+v", want, env.Metrics)
+		}
 	}
 }
 

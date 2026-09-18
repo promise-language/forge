@@ -1,9 +1,109 @@
 package tooling
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// A run that failed, and reported nothing countable, could not be measured:
+// "zero failures" is not a reading of a run that did not happen. The three
+// concepts answer differently over the same broken unit, and the difference is
+// what each toolchain actually reported.
+//
+// It measures a real unit with a real toolchain because the rule is about what
+// `go build`, `go vet` and `go test` write when a package does not compile, and
+// a fixture standing in for them would only restate what this test is here to
+// check.
+func TestARunThatReportedNothingCountableIsNotZero(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "")
+	// It parses, so `go list` loads the package and every measurement is
+	// reached; it does not type-check, so none of them completes normally.
+	write(t, root, "x.go", "package x\n\nfunc F() { return 1 }\n")
+	git(t, root, "add", "-A")
+	r, _ := run(t, Standard(), root)
+	unit := Unit{Toolchain: "go"}
+
+	// go build prefixes the package it could not compile, so there is something
+	// to count and the count is the measurement.
+	built, err := goBuilds(r, unit)
+	if err != nil {
+		t.Fatalf("a package that does not compile was reported as a failure to measure: %v", err)
+	}
+	if n := tally(t, built, "unbuildable_packages"); n != 1 {
+		t.Errorf("unbuildable_packages = %d, want the one package that did not compile", n)
+	}
+
+	// go vet printed no JSON at all. That is not zero findings: it is a
+	// toolchain that did not report, and absorbed as a zero it would read as a
+	// clean tree.
+	if got, err := goChecked(r, unit); err == nil {
+		t.Errorf("a vet run that printed no JSON was read as %+v, want nothing measured", got.Counts)
+	}
+
+	// go test did report events, and a package that failed to build is one
+	// failing package rather than a failing test.
+	tested, err := goTested(r, unit)
+	if err != nil {
+		t.Fatalf("a test run that reported events was read as nothing measured: %v", err)
+	}
+	if n := tally(t, tested, "failed_packages"); n != 1 {
+		t.Errorf("failed_packages = %d, want 1", n)
+	}
+	if n := tally(t, tested, "failed_tests"); n != 0 {
+		t.Errorf("failed_tests = %d, want a build failure not counted as a failing test", n)
+	}
+}
+
+// A coverage profile is scratch, so it goes under .home/tmp/ in a directory
+// unique to the run. A gate that dropped it in the worktree would have modified
+// the subject it was measuring, and one that dropped it in the system's
+// temporary directory would have written outside the repository root.
+func TestTheCoverageProfileIsScratchInsideTheCheckout(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "")
+	write(t, root, "x.go", "package x\n\nfunc F() int { return 1 }\n")
+	write(t, root, "x_test.go", "package x\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { F() }\n")
+	git(t, root, "add", "-A")
+	before := git(t, root, "status", "--porcelain")
+	r, _ := run(t, Standard(), root)
+
+	res, err := goCovered(r, Unit{Toolchain: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Ratios) != 1 || res.Ratios[0].Name != "statement_coverage" || res.Ratios[0].Whole == 0 {
+		t.Errorf("coverage came back as %+v, want statements counted", res.Ratios)
+	}
+
+	if want := filepath.Join(root, filepath.FromSlash(ScratchDir)); !strings.HasPrefix(r.ScratchRoot(), want) {
+		t.Fatalf("this run's scratch is %q, want it under %s", r.ScratchRoot(), want)
+	}
+	if _, err := os.Stat(r.Scratch("cover-root.out")); err != nil {
+		t.Errorf("the profile is not in this run's scratch: %v", err)
+	}
+	if after := git(t, root, "status", "--porcelain"); after != before {
+		t.Errorf("the measurement left the tracked tree changed:\nbefore\n%s\nafter\n%s", before, after)
+	}
+}
+
+func tally(t *testing.T, res UnitResult, name string) int64 {
+	t.Helper()
+	for _, c := range res.Counts {
+		if c.Name == name {
+			return c.N
+		}
+	}
+	t.Fatalf("the result reports no %s: %+v", name, res.Counts)
+	return 0
+}
 
 // A count is read from a structured report wherever the toolchain has one,
 // never by matching prose meant for a person. `go vet -json` splits its report

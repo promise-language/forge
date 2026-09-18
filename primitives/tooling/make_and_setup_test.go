@@ -2,6 +2,7 @@ package tooling
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -43,6 +44,132 @@ func TestTheBuildSetIsEveryCommandButTheBuilder(t *testing.T) {
 	write(t, root, filepath.FromSlash("tools/build/cmd/Release_2/main.go"), "package main\n")
 	if _, err := BuildSet(root); err == nil {
 		t.Error("a directory outside the alphabet was accepted as a command name")
+	}
+}
+
+// toolsFixture is a checkout whose tools/build is a real, compilable module, so
+// the builder can be run rather than approximated. The pieces around the compile
+// — the source set derived from `go list`, the sidecar, the up-to-date
+// comparison — only mean anything over a tree the Go toolchain will accept.
+func toolsFixture(t *testing.T, commands map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "", primitives.ToolsBuildDir)
+	for name, body := range commands {
+		write(t, root, filepath.FromSlash(primitives.ToolsBuildDir+"/cmd/"+name+"/main.go"), body)
+	}
+	git(t, root, "add", "-A")
+	return root
+}
+
+const trivialMain = "package main\n\nvar stamp string\n\nfunc main() { _ = stamp }\n"
+
+// make's run, in order: it wires and checks, derives its own source set,
+// compiles what tools/build/cmd holds, runs the project's steps around the
+// compile, and writes the sidecar last. A second run compares that sidecar with
+// the source hash and each binary's digest and stops; -rebuild compiles anyway.
+func TestTheBuilderStopsWhenNothingIsStaleAndRebuildCompilesAnyway(t *testing.T) {
+	root := toolsFixture(t, map[string]string{
+		"make": "package main\n\nfunc main() {}\n",
+		"x":    trivialMain,
+	})
+	p := Standard()
+	var before, after int
+	p.Make.Before = []Step{{Name: "before", Run: func(*Run) error { before++; return nil }}}
+	p.Make.After = []Step{{Name: "after", Run: func(*Run) error { after++; return nil }}}
+
+	r, narrated := run(t, p, root)
+	first, err := RunMake(r, false)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, narrated.String())
+	}
+	if first.UpToDate || !slices.Equal(first.Built, []string{"x"}) {
+		t.Fatalf("the first run answered %+v, want it to have built the one command that is not the builder", first)
+	}
+	if before != 1 || after != 1 {
+		t.Errorf("the project's steps ran %d before and %d after, want once each", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(root, "bin", primitives.BinaryName("x"))); err != nil {
+		t.Fatalf("nothing landed in bin/: %v", err)
+	}
+
+	second, err := RunMake(r, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.UpToDate || len(second.Built) != 0 {
+		t.Errorf("the second run answered %+v, want it to report the tools up to date", second)
+	}
+	if before != 1 || after != 1 {
+		t.Errorf("the project's steps ran again on a run that compiled nothing (%d before, %d after)", before, after)
+	}
+
+	forced, err := RunMake(r, true)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, narrated.String())
+	}
+	if forced.UpToDate || !slices.Equal(forced.Built, []string{"x"}) {
+		t.Errorf("-rebuild answered %+v, want it to compile where bin/ is already up to date", forced)
+	}
+}
+
+// The source set is derived, never declared: it is all of tools/build plus
+// every package outside it the tools import from a local replace target, as `go
+// list` reports them. A package named this way is hashed by its own files, so
+// editing it reports every binary stale — which is the whole of what the
+// staleness contract rests on.
+func TestTheSourceSetFollowsALocalReplace(t *testing.T) {
+	root := toolsFixture(t, map[string]string{
+		"make": "package main\n\nfunc main() {}\n",
+		"x":    "package main\n\nimport \"example.com/lib\"\n\nfunc main() { lib.F() }\n",
+	})
+	write(t, root, filepath.FromSlash("lib/go.mod"), "module example.com/lib\n\ngo 1.26\n")
+	write(t, root, filepath.FromSlash("lib/a.go"), "package lib\n\nfunc F() {}\n")
+	write(t, root, filepath.FromSlash(primitives.ToolsBuildDir+"/go.mod"),
+		"module example.com/tools\n\ngo 1.26\n\nrequire example.com/lib v0.0.0\n\nreplace example.com/lib => ../../lib\n")
+	git(t, root, "add", "-A")
+
+	r, _ := run(t, Standard(), root)
+	set, err := SourceSet(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(set, primitives.ToolsBuildDir) || !slices.Contains(set, "lib/*") {
+		t.Fatalf("the source set is %v, want tools/build and the package it imports from a local replace", set)
+	}
+
+	before, err := primitives.SourceHash(root, set...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, filepath.FromSlash("lib/a.go"), "package lib\n\nfunc F() { _ = 1 }\n")
+	after, err := primitives.SourceHash(root, set...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Error("editing a package the tools import did not change the hash, so no binary would report itself stale")
+	}
+}
+
+// Any failure exits 1 and no sidecar is written: a sidecar recording a build
+// that did not happen is what would make the next run report the tools up to
+// date.
+func TestABuildThatFailedWritesNoSidecar(t *testing.T) {
+	root := toolsFixture(t, map[string]string{
+		"make": "package main\n\nfunc main() {}\n",
+		// It parses, so the source set is derived; it does not compile.
+		"broken": "package main\n\nfunc main() { return 1 }\n",
+	})
+
+	r, _ := run(t, Standard(), root)
+	if _, err := RunMake(r, false); err == nil {
+		t.Fatal("a tool that did not compile was reported as built")
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(SidecarFile))); !os.IsNotExist(err) {
+		t.Errorf("a failed build left a sidecar behind: %v", err)
 	}
 }
 

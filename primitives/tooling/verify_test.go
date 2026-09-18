@@ -1,6 +1,7 @@
 package tooling
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promise-language/forge/primitives/command"
 
 	"github.com/promise-language/forge/primitives"
 )
@@ -149,6 +152,78 @@ func TestAGateNoTermJudgesFailsRatherThanPasses(t *testing.T) {
 	}
 }
 
+// A measurement beyond its term fails the step it was measured in, and the
+// verdict's own detail is the failure. The summary's evidence is what someone
+// reads instead of re-running the gate by hand.
+func TestAMeasurementBeyondItsTermFailsTheStep(t *testing.T) {
+	root := fixture(t, "")
+	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	p := counting("x", []Metric{Count("n")}, Measured{
+		Metrics: []Measurement{Counted("n", 2, "")},
+		Groups:  []Group{{Name: "root", Metrics: []Measurement{Counted("n", 2, "")}}},
+	}, nil)
+
+	r, _ := run(t, p, root)
+	err := JudgedStep("x").Run(r)
+	if err == nil {
+		t.Fatal("a measurement over its cap passed the step it was measured in")
+	}
+	for _, want := range []string{"n is 2", "cap 0", "root"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the failure is %q, want it to say %q", err, want)
+		}
+	}
+}
+
+// verify ratchets: after every measuring stage has passed, each baseline whose
+// metric the run measured completely moves in the baseline's direction, and the
+// move is on disk before the tree is recorded — so the commit that earned the
+// improvement carries it.
+func TestAGreenRunMovesTheBaselineItEarned(t *testing.T) {
+	root := fixture(t, "")
+	terms(t, root, `{}`, `{"n": {"direction": "up", "value": 3}}`)
+	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 7, "")}}, nil)
+	p.Verify = Pipeline{}
+	p.Verify.AddStage(Stage{Name: StageMeasure, Steps: []Step{JudgedStep("x")}})
+	p.Verify.AddStage(Stage{Name: StageRatchet, Steps: []Step{{Name: "baselines", Run: ratchetStep}}})
+
+	r, narrated := run(t, p, root)
+	got, err := RunVerify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.OK {
+		t.Fatalf("a green run reported %+v", got.Stages)
+	}
+
+	moved, err := loadBaselines(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved["n"].Value == nil || *moved["n"].Value != 7 {
+		t.Errorf("the baseline is %+v, want the value the run earned", moved["n"])
+	}
+	if !strings.Contains(narrated.String(), "moved from 3 to 7") {
+		t.Errorf("the ratchet did not report what it moved: %q", narrated.String())
+	}
+}
+
+// verify refuses when .workspace/ is not ignored. A record in a tracked path is
+// a file `git add -A` would put into the very tree it claims to bless, so the
+// record could never match what the guard stages.
+func TestRecordingRefusesWhereTheRecordWouldBeTracked(t *testing.T) {
+	root := fixture(t, "")
+	write(t, root, ".gitignore", "/bin/\n/.home/\n")
+	git(t, root, "add", "-A")
+
+	r, _ := run(t, Standard(), root)
+	if _, err := RecordVerifiedTree(r); err == nil {
+		t.Error("the record was written into a path git would stage")
+	} else if !strings.Contains(err.Error(), ".workspace") {
+		t.Errorf("the refusal is %q, want it to name the directory that is not ignored", err)
+	}
+}
+
 // The record is cleared before the first stage and written only after the last,
 // so a red or interrupted run blesses nothing.
 func TestARedRunBlessesNothing(t *testing.T) {
@@ -279,6 +354,41 @@ func TestOutsideACheckoutRecordingIsAReportedNoOp(t *testing.T) {
 	}
 	if !strings.Contains(narrated.String(), "not a git checkout") {
 		t.Errorf("the no-op was not reported: %q", narrated.String())
+	}
+}
+
+// verify writes its result to stdout and its progress to stderr, so
+// `bin/verify > result.json` and `bin/verify 2>/dev/null` both behave. A run
+// that failed still writes the result — the caller asked whether this tree may
+// be committed, and a no is an answer — and the status says the answer was no.
+func TestVerifyWritesItsResultToStdoutAndItsProgressToStderr(t *testing.T) {
+	root := fixture(t, "")
+	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	stamp := stamped(t, root)
+
+	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 2, "")}}, nil)
+	p.Verify = Pipeline{}
+	p.Verify.AddStage(Stage{Name: StageMeasure, Steps: []Step{JudgedStep("x")}})
+
+	var out, errs strings.Builder
+	status := VerifyTool(p, stamp).RunWith(nil,
+		command.Streams{Out: &out, Err: &errs, Dir: root})
+
+	if status != command.StatusFailed {
+		t.Errorf("status = %d, want %d when a stage did not pass", status, command.StatusFailed)
+	}
+	var result VerifyResult
+	if err := json.Unmarshal([]byte(out.String()), &result); err != nil {
+		t.Fatalf("stdout is not the result (%v): %q", err, out.String())
+	}
+	if result.OK || len(result.Stages) != 1 {
+		t.Errorf("the result is %+v, want a red run reporting its one stage", result)
+	}
+	if strings.Contains(out.String(), "==>") {
+		t.Errorf("progress reached stdout: %q", out.String())
+	}
+	if !strings.Contains(errs.String(), "==> "+StageMeasure) {
+		t.Errorf("stderr carries no progress: %q", errs.String())
 	}
 }
 

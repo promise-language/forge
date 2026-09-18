@@ -170,6 +170,23 @@ func TestBothModesReachTheVerdictThroughOneComparison(t *testing.T) {
 	}
 }
 
+// A count arriving with a fractional part is not a count, and the judge refuses
+// it rather than absorbing it. Absorbed, it would be a type change nothing
+// recorded — and it would move a ratchet that by construction never moves back.
+func TestACountArrivingWithAFractionalPartIsRefused(t *testing.T) {
+	root := fixture(t, "")
+	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	p := counting("x", []Metric{Count("n")}, Measured{}, nil)
+	r, _ := run(t, p, root)
+
+	for _, value := range []string{"1.5", `"three"`} {
+		body := `{"gate":"x","target":"` + HostTarget() + `","metrics":[{"name":"n","type":"int","value":` + value + `}]}`
+		if verdict, err := JudgeStdin(r, "x", strings.NewReader(body)); err == nil {
+			t.Errorf("a value of %s was absorbed as a count and judged %+v", value, verdict)
+		}
+	}
+}
+
 // A binary that is not fit to act refuses every invocation, and the source set
 // it checks against comes out of its own stamp.
 func TestAStaleBinaryRefusesWithTheRecoveryNamed(t *testing.T) {
