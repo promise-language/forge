@@ -55,20 +55,70 @@ func TestTheTermFilesAreReadStrictly(t *testing.T) {
 	}
 }
 
-// A refused direction names the two that are accepted. The refusal is the only
-// thing a project holding the wrong word ever sees, so it has to carry the
-// right one rather than only the verdict that this one is wrong.
+// A refused direction names the two that are accepted, whether the entry holds
+// the wrong word or no word at all. The refusal is the only thing a project
+// holding the wrong word ever sees, so it has to carry the right one rather
+// than only the verdict that this one is wrong.
 func TestARefusedDirectionNamesTheTwoThatAreAccepted(t *testing.T) {
-	root := t.TempDir()
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, noBaselines)
-	_, err := LoadTerms(root)
-	if err == nil {
-		t.Fatal("the terms were accepted")
+	for _, c := range []struct {
+		name       string
+		thresholds string
+		says       []string
+	}{
+		{"a word the set does not hold", `{"n": {"direction": "down", "cap": 0}}`,
+			[]string{ThresholdsFile, `"n"`, `"down"`, `"at_most"`, `"at_least"`}},
+		{"no word at all", `{"n": {"cap": 0}}`,
+			[]string{ThresholdsFile, `"n"`, `"at_most"`, `"at_least"`}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			terms(t, root, c.thresholds, noBaselines)
+			_, err := LoadTerms(root)
+			if err == nil {
+				t.Fatal("the terms were accepted")
+			}
+			for _, says := range c.says {
+				if !strings.Contains(err.Error(), says) {
+					t.Errorf("the refusal is %q, want it to say %s", err, says)
+				}
+			}
+		})
 	}
-	for _, says := range []string{ThresholdsFile, `"n"`, `"down"`, `"at_most"`, `"at_least"`} {
-		if !strings.Contains(err.Error(), says) {
-			t.Errorf("the refusal is %q, want it to say %s", err, says)
-		}
+}
+
+// A term is the side of it a measurement must be on, inclusively: at_most 0
+// accepts 0 and at_least 75 accepts 75. The boundary is the only place the two
+// words differ from a strict comparison, and it is where a project reading the
+// vocabulary for the first time decides what its cap means.
+func TestAMeasurementAtItsTermIsWithinIt(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		thresholds string
+		measured   Measurement
+	}{
+		{"at_most accepts the cap itself",
+			`{"n": {"direction": "at_most", "cap": 0}}`, Counted("n", 0, "")},
+		{"at_least accepts the cap itself",
+			`{"n": {"direction": "at_least", "cap": 75}}`, Quantity("n", 75, "percent")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			terms(t, root, c.thresholds, noBaselines)
+			read, err := LoadTerms(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdict, err := Judge(Envelope{
+				Gate: "x", Target: HostTarget(),
+				Metrics: []Measurement{c.measured},
+			}, read, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !verdict.Acceptable {
+				t.Errorf("a measurement at its term was refused: %s", verdict.Detail)
+			}
+		})
 	}
 }
 
@@ -305,6 +355,34 @@ func TestARatchetMovesOnlyForward(t *testing.T) {
 	}
 	if got := readBaseline(t, root, "cov"); got != 91 {
 		t.Errorf("baseline = %v, want the better value the run earned", got)
+	}
+}
+
+// The ratchet reads the baselines file itself, so the strict reading is its
+// reading too. This is the path a project upgrading the pinned library arrives
+// on with the former vocabulary still in the file, and it has to refuse: the
+// comparison falls through to the one at_least makes, so a baseline written
+// `up` would be moved and rewritten under a word the judge then will not read —
+// a ratchet advanced past a term nobody can apply, which by construction never
+// moves back.
+func TestARatchetRefusesABaselineItCannotRead(t *testing.T) {
+	root := t.TempDir()
+	terms(t, root, `{}`, `{"cov": {"direction": "up", "value": 80}}`)
+
+	moved, err := Ratchet(root, []Envelope{{
+		Gate: "covered", Target: HostTarget(),
+		Metrics: []Measurement{Quantity("cov", 91, "percent")},
+	}})
+	if err == nil {
+		t.Fatalf("the ratchet answered %v over a baseline it cannot read", moved)
+	}
+	for _, says := range []string{BaselinesFile, `"up"`, `"at_least"`} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal is %q, want it to say %s", err, says)
+		}
+	}
+	if got := readBaseline(t, root, "cov"); got != 80 {
+		t.Errorf("the file was rewritten to %v", got)
 	}
 }
 

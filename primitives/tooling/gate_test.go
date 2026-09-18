@@ -265,6 +265,36 @@ func TestAPropertyCarryingANumberIsRefused(t *testing.T) {
 	}
 }
 
+// The type set is closed, and widening it to bool did not open it. A type
+// outside the set is refused at decode rather than absorbed, because a
+// measurement whose type nothing recognises carries its value in none of the
+// fields a reader looks in: absorbed, it is zero, and zero is within a cap of
+// zero. A gate written in another language reaches this decoder having been
+// through none of the sending side's checks, so the near-miss spelling is the
+// case that matters.
+func TestAMetricTypeOutsideTheSetIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body string
+	}{
+		{"a near-miss spelling",
+			`{"gate":"x","metrics":[{"name":"n","type":"boolean","value":true}]}`},
+		{"no type at all",
+			`{"gate":"x","metrics":[{"name":"n","value":0}]}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var env Envelope
+			err := json.Unmarshal([]byte(c.body), &env)
+			if err == nil {
+				t.Fatalf("the envelope was read: %+v", env)
+			}
+			if !strings.Contains(err.Error(), "unknown type") {
+				t.Errorf("the refusal is %q, want it to name the type as the disagreement", err)
+			}
+		})
+	}
+}
+
 // A composition's metrics are its parts' metrics and its groups are its parts'
 // groups, and a part that is incomplete makes the whole incomplete, naming the
 // part.
