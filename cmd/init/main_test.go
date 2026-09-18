@@ -261,18 +261,75 @@ func TestNoEmittedFileIsIgnoredByTheGitignoreTheSameRunWrites(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git on this machine")
 	}
+	ignores := scaffoldedIgnores(t, true)
+
+	var emitted []string
+	for _, f := range files() {
+		emitted = append(emitted, f.path)
+	}
+	// check-ignore exits 0 when at least one path is ignored and names the ones
+	// that are; 1 when none is. Anything else is git refusing the question.
+	if out, code := ignores(emitted...); code == 0 {
+		t.Errorf("the scaffolder emits files its own .gitignore ignores, so a clone carries none of them:\n%s", out)
+	} else if code != 1 {
+		t.Fatalf("git check-ignore answered neither ignored nor tracked (%d):\n%s", code, out)
+	}
+
+	// The control. Without it a run where check-ignore matched nothing for a
+	// reason of its own — the wrong directory, a .gitignore that was never
+	// written — reads as every emitted file being tracked, which is the shape of
+	// a test that passes whatever the code does.
+	if out, code := ignores(".claude/settings.local.json"); code != 0 {
+		t.Errorf("the per-clone sibling is not ignored (%d), so the check above proves nothing:\n%s", code, out)
+	}
+}
+
+// The control above is only a control if it answers from the .gitignore the run
+// wrote. Asked of the same tree with that one step left out, it must report the
+// sibling TRACKED — and on a machine whose own excludes cover the path it will
+// not, which is the state this pair exists to catch. Without this test the
+// control passes on such a machine whatever ensureGitignore did, so the whole
+// check reads as coverage while asserting nothing about the repository.
+func TestTheSiblingIsIgnoredByTheScaffoldedRuleAndNothingElse(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	if out, code := scaffoldedIgnores(t, false)(".claude/settings.local.json"); code != 1 {
+		t.Errorf("with no .gitignore written, git still answers that the sibling is ignored (%d) — the rule came from outside the repository:\n%s", code, out)
+	}
+}
+
+// scaffoldedIgnores lays the emitted files down in a fresh git repository and
+// returns git's answer to "does this repository ignore these paths": the output,
+// and check-ignore's status. writeIgnores selects whether ensureGitignore runs,
+// which is the one difference between the check above and its own control.
+//
+// Every query is asked with the ignore sources OUTSIDE the repository out of the
+// way, because an ignore rule only counts when the repository carries it, and a
+// rule from the machine's global config does not (workspace's `bootstrap.md`,
+// Setup owns the installed name set). Left in, a developer's excludes file
+// answers for the repository: green here and red on the next machine, and a
+// failure that names a scaffolder defect nobody can reproduce.
+func scaffoldedIgnores(t *testing.T, writeIgnores bool) func(paths ...string) (string, int) {
+	t.Helper()
 	dir := t.TempDir()
 	for _, f := range files() {
 		if _, err := writeFile(dir, f, "example/tools/build", false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := ensureGitignore(dir); err != nil {
-		t.Fatal(err)
+	if writeIgnores {
+		if _, err := ensureGitignore(dir); err != nil {
+			t.Fatal(err)
+		}
 	}
+	// A path that does not exist carries no patterns, and it is inside the temp
+	// tree so nothing outside can make it exist. Slashes, because that is the
+	// spelling git config reads on every OS this repository builds for.
+	noExcludes := "core.excludesFile=" + filepath.ToSlash(filepath.Join(dir, "no-such-excludes-file"))
 	git := func(args ...string) (string, int) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := exec.Command("git", append([]string{"-c", noExcludes}, args...)...)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		var status *exec.ExitError
@@ -287,25 +344,15 @@ func TestNoEmittedFileIsIgnoredByTheGitignoreTheSameRunWrites(t *testing.T) {
 	if out, code := git("init"); code != 0 {
 		t.Fatalf("git init failed (%d):\n%s", code, out)
 	}
-
-	var emitted []string
-	for _, f := range files() {
-		emitted = append(emitted, f.path)
+	// The other source that is not a file the repository carries. A fresh init
+	// leaves it holding nothing but comments; emptying it states that rather than
+	// depending on it.
+	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	// check-ignore exits 0 when at least one path is ignored and names the ones
-	// that are; 1 when none is. Anything else is git refusing the question.
-	if out, code := git(append([]string{"check-ignore", "--"}, emitted...)...); code == 0 {
-		t.Errorf("the scaffolder emits files its own .gitignore ignores, so a clone carries none of them:\n%s", out)
-	} else if code != 1 {
-		t.Fatalf("git check-ignore answered neither ignored nor tracked (%d):\n%s", code, out)
-	}
-
-	// The control. Without it a run where check-ignore matched nothing for a
-	// reason of its own — the wrong directory, a .gitignore that was never
-	// written — reads as every emitted file being tracked, which is the shape of
-	// a test that passes whatever the code does.
-	if out, code := git("check-ignore", "--", ".claude/settings.local.json"); code != 0 {
-		t.Errorf("the per-clone sibling is not ignored (%d), so the check above proves nothing:\n%s", code, out)
+	return func(paths ...string) (string, int) {
+		t.Helper()
+		return git(append([]string{"check-ignore", "--"}, paths...)...)
 	}
 }
 
