@@ -184,12 +184,12 @@ func TestCoverageCountsComeFromTheProfile(t *testing.T) {
 		"example.com/x/a.go:3.1,4.2 3 0\n"+
 		"example.com/x/b.go:1.1,2.2 2 7\n")
 
-	hit, stmts, err := coverageCounts(profile)
+	hit, statements, err := coverageCounts(profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hit != 7 || stmts != 10 {
-		t.Errorf("(hit, statements) = (%d, %d), want (7, 10)", hit, stmts)
+	if hit != 7 || statements != 10 {
+		t.Errorf("(hit, statements) = (%d, %d), want (7, 10)", hit, statements)
 	}
 
 	for _, c := range []struct{ name, body string }{

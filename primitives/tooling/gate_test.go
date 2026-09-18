@@ -297,7 +297,7 @@ func TestACompositionCannotReportOneNameTwice(t *testing.T) {
 // Go-only checkout is fit on a machine that has never heard of Promise — and
 // the same machine is not, the moment a Promise unit is tracked.
 func TestFitToolchainCountsOnlyTheToolchainsWithUnits(t *testing.T) {
-	if primitives.Which("promise") != "" {
+	if _, found := primitives.Which("promise"); found {
 		t.Skip("this machine has promise, so its absence cannot be measured")
 	}
 

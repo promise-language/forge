@@ -20,13 +20,15 @@ func ExeSuffix() string {
 // BinaryName appends the platform executable suffix to a tool name.
 func BinaryName(name string) string { return name + ExeSuffix() }
 
-// Which resolves a command in PATH, returning "" if it is not found.
-func Which(cmd string) string {
-	p, err := exec.LookPath(cmd)
+// Which resolves a program in PATH, reporting whether it was found. Absence is
+// the second result rather than an empty path, so a caller cannot read "not on
+// PATH" as a path it then tries to run.
+func Which(program string) (string, bool) {
+	path, err := exec.LookPath(program)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return p
+	return path, true
 }
 
 // Exists reports whether a path exists.

@@ -264,6 +264,51 @@ func TestEnsureBuildDocCreatesTheFileWhenAbsent(t *testing.T) {
 	}
 }
 
+// An append that cannot happen is an error, not a written record. Both files
+// are appended through appendToFile, which reports the close as well as the
+// write: a section that never reached the disk must not be reported as one
+// that did. A directory standing where the file goes is the one way to make
+// the open fail identically on every platform.
+func TestAnAppendThatCannotHappenIsReportedAndNotRecorded(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		file   string
+		ensure func(string) (written, error)
+	}{
+		{".gitignore", ".gitignore", ensureGitignore},
+		{"CLAUDE.md", "CLAUDE.md", ensureBuildDoc},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Mkdir(filepath.Join(dir, c.file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			got, err := c.ensure(dir)
+			if err == nil {
+				t.Fatalf("appending into a directory reported success: %+v", got)
+			}
+			if got != (written{}) {
+				t.Errorf("a failed append still answered a record: %+v", got)
+			}
+		})
+	}
+}
+
+// appendToFile creates what is absent and appends to what is there, and it is
+// the one implementation both ensure* functions write through.
+func TestAppendToFileCreatesThenAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.md")
+	if err := appendToFile(path, "one\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendToFile(path, "two\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, path); got != "one\ntwo\n" {
+		t.Errorf("appendToFile wrote %q, want %q", got, "one\ntwo\n")
+	}
+}
+
 func TestExists(t *testing.T) {
 	dir := t.TempDir()
 	if exists(filepath.Join(dir, "nope")) {

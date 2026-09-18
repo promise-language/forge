@@ -41,6 +41,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -270,12 +271,7 @@ func ensureGitignore(absTarget string) (written, error) {
 	}
 	block := "\n# forge dev tooling — written per clone, never committed\n" +
 		strings.Join(missing, "\n") + "\n"
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return written{}, err
-	}
-	defer f.Close()
-	if _, err := f.WriteString(block); err != nil {
+	if err := appendToFile(path, block); err != nil {
 		return written{}, err
 	}
 	return written{Path: ".gitignore", Action: actionUpdate, Detail: "+" + strings.Join(missing, ", ")}, nil
@@ -326,15 +322,25 @@ func ensureBuildDoc(absTarget string) (written, error) {
 		body = "\n" + body // separate from prior content
 		action = actionUpdate
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return written{}, err
-	}
-	defer f.Close()
-	if _, err := f.WriteString(body); err != nil {
+	if err := appendToFile(path, body); err != nil {
 		return written{}, err
 	}
 	return written{Path: "CLAUDE.md", Action: action, Detail: "dev tooling section"}, nil
+}
+
+// appendToFile appends to a file, creating it if it is absent, and reports the
+// close alongside the write. A WriteString that succeeded into a buffer the
+// close then failed to flush is a write that did not land, and a discarded
+// close would let init report the file as updated anyway.
+func appendToFile(path, body string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(body); err != nil {
+		return errors.Join(err, f.Close())
+	}
+	return f.Close()
 }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
@@ -362,8 +368,6 @@ func files() []file {
 		{path: ".claude/settings.json", body: settingsJSON},
 	}
 }
-
-// ───────────────────────── trampolines ─────────────────────────
 
 const makeSh = `#!/usr/bin/env bash
 # Bootstrap trampoline. Compiles every dev tool into bin/ via the meta-builder.
@@ -442,8 +446,6 @@ That is the whole loop: edit → §./make§ → use. Add a tool by dropping a ne
 under §tools/build/cmd/§ and re-running §./make§ — no registration step.
 <!-- /forge:dev-tooling -->
 `
-
-// ───────────────────────── tools module ─────────────────────────
 
 // forgeVersion is the version of forge a scaffolded project pins, and it is
 // written down once: both go.mod and go.sum carry __FORGE_VERSION__ and
@@ -873,8 +875,6 @@ func gitWithIndex(dir, indexFile string, args ...string) (string, error) {
 }
 `
 
-// ───────────────────────── gates and the judge ─────────────────────────
-
 // gateGo is the measuring half: what this project measures, and how. The
 // judging half is runGo, and they are separate programs on purpose — see there.
 var gateGo = substituteBackticks(gateGoRaw)
@@ -986,6 +986,10 @@ type metricWire struct {
 	Unit  string          §json:"unit,omitempty"§
 }
 
+// MarshalJSON writes the metric in its wire form: the number rendered in its
+// own type, and the type beside it. A metric carrying no type is refused rather
+// than written as a zero, because a reader cannot tell a count of none from a
+// number nothing measured.
 func (m Metric) MarshalJSON() ([]byte, error) {
 	w := metricWire{Name: m.Name, Type: m.Type, Unit: m.Unit}
 	switch m.Type {
@@ -999,6 +1003,9 @@ func (m Metric) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w)
 }
 
+// UnmarshalJSON reads the wire form back, holding the value to the type the
+// wire declared: a count arriving with a fractional part, or a type this file
+// does not know, is an error rather than a silently widened number.
 func (m *Metric) UnmarshalJSON(b []byte) error {
 	var w metricWire
 	if err := json.Unmarshal(b, &w); err != nil {
@@ -1042,7 +1049,7 @@ type Envelope struct {
 // gateDef is either a leaf that measures, or a composition of other gates.
 type gateDef struct {
 	summary string
-	measure func(repoRoot string, mods []string) ([]Metric, string, error)
+	measure func(repoRoot string, modules []string) ([]Metric, string, error)
 	parts   []string
 }
 
@@ -1210,9 +1217,9 @@ func measureFormatted(repoRoot string, _ []string) ([]Metric, string, error) {
 // measureBuilds counts packages that fail to compile. §go build§ prefixes each
 // failing package with a "# " header line on stderr, so the headers are the
 // count.
-func measureBuilds(_ string, mods []string) ([]Metric, string, error) {
+func measureBuilds(_ string, modules []string) ([]Metric, string, error) {
 	n := 0
-	for _, dir := range mods {
+	for _, dir := range modules {
 		_, stderr, err := gateValue(dir, "go", "build", "./...")
 		found := countPrefixed(stderr, "# ")
 		if err != nil && found == 0 {
@@ -1228,9 +1235,9 @@ func measureBuilds(_ string, mods []string) ([]Metric, string, error) {
 // measureChecked counts go vet diagnostics — the lines naming a file and a
 // position, as distinct from the "# package" headers that group them. The
 // diagnostics are on stderr.
-func measureChecked(_ string, mods []string) ([]Metric, string, error) {
+func measureChecked(_ string, modules []string) ([]Metric, string, error) {
 	n := 0
-	for _, dir := range mods {
+	for _, dir := range modules {
 		_, stderr, err := gateValue(dir, "go", "vet", "./...")
 		found := countDiagnostics(stderr)
 		if err != nil && found == 0 {
@@ -1244,9 +1251,9 @@ func measureChecked(_ string, mods []string) ([]Metric, string, error) {
 // measureTested counts failing tests and failing packages. Both are worth
 // having: one failing test in one package and forty in forty are different
 // situations, and a single number cannot tell them apart.
-func measureTested(_ string, mods []string) ([]Metric, string, error) {
-	tests, pkgs := 0, 0
-	for _, dir := range mods {
+func measureTested(_ string, modules []string) ([]Metric, string, error) {
+	tests, packages := 0, 0
+	for _, dir := range modules {
 		out, err := gateOutput(dir, "go", "test", "./...")
 		t := countPrefixed(out, "--- FAIL:")
 		p := countPrefixed(out, "FAIL\t")
@@ -1256,11 +1263,11 @@ func measureTested(_ string, mods []string) ([]Metric, string, error) {
 			return nil, "", fmt.Errorf("go test in %s: %w: %s", dir, err, firstLine(out))
 		}
 		tests += t
-		pkgs += p
+		packages += p
 	}
 	return []Metric{
 		Count("failed_tests", tests),
-		Count("failed_packages", pkgs),
+		Count("failed_packages", packages),
 	}, "", nil
 }
 
@@ -1283,7 +1290,7 @@ func prereqCommands() []string { return []string{"go", "gofmt", "git"} }
 func measureFit(_ string, _ []string) ([]Metric, string, error) {
 	missing := 0
 	for _, cmd := range prereqCommands() {
-		if primitives.Which(cmd) == "" {
+		if _, found := primitives.Which(cmd); !found {
 			fmt.Fprintf(os.Stderr, "==> missing prerequisite: %s\n", cmd)
 			missing++
 		}
@@ -1984,8 +1991,6 @@ func TestMetricRefusesAValueThatIsNotItsDeclaredType(t *testing.T) {
 }
 `
 
-// ───────────────────────── cmd mains ─────────────────────────
-//
 // Each main is a definition and one call into the command library. What it
 // parses, how it renders, which mode it writes in and what it exits with are
 // not a main's to decide (docs/command-line.md, One implementation) — and a
@@ -2563,8 +2568,6 @@ func main() {
 }
 `
 
-// ───────────────────────── the judging terms ─────────────────────────
-
 // thresholdsJSON caps every metric the starter gates emit. A metric with no
 // entry cannot fail, so an empty manifest is a judge that accepts everything —
 // and a verdict carrying no terms is one nothing can re-check.
@@ -2602,8 +2605,6 @@ const thresholdsJSON = `{
 // is an edit here rather than a new file nobody reads.
 const baselinesJSON = `{}
 `
-
-// ───────────────────────── docs ─────────────────────────
 
 // docsIndexMd is the map of docs/, and a scaffolded project must be born with a
 // conformant one: org/normative.md, Location makes the index the one per-project
@@ -2669,8 +2670,6 @@ file.
 Provisioning delivers it. A checkout that has not been provisioned has no
 §docs/org/§ yet, and the entry above is what it will be when it does.
 `
-
-// ───────────────────────── claude config ─────────────────────────
 
 // settingsJSON wires bin/tool-guard, a workspace tool this project does not
 // build, on BOTH tool-use events (docs/blueprint.md, The agent guard). PreToolUse is the gate

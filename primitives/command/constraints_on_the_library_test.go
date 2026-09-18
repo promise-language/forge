@@ -17,12 +17,12 @@ import (
 // primitives' own import test, which walks the tree.
 func TestConstraintsOnTheLibrary(t *testing.T) {
 	set := token.NewFileSet()
-	pkgs, err := parser.ParseDir(set, ".", nil, 0)
+	packages, err := parser.ParseDir(set, ".", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	scanned := 0
-	for name, pkg := range pkgs {
+	for name, pkg := range packages {
 		for path, file := range pkg.Files {
 			if strings.HasSuffix(path, "_test.go") {
 				continue
