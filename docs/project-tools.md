@@ -623,7 +623,8 @@ its own first consumer), and copies no helper `primitives` carries:
   holds from its first commit (org/normative.md, Location). The corpus itself is not
   emitted: it reaches a project by sync, and a copy frozen into the scaffolder would be
   one no stamp checks;
-- the committed wiring for the agent guard, `.claude/settings.json`. It emits no `.githooks/`
+- the committed wiring for the agent guard, `.claude/settings.json`
+  ([blueprint.md](blueprint.md), Tools the project does not build). It emits no `.githooks/`
   wiring: the commit guard and the hook that reaches it are both `workspace setup`'s
   ([blueprint.md](blueprint.md), The commit gate hook);
 - the `.gitignore` entries [setup](#setup) requires.
