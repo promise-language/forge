@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/promise-language/forge/primitives/command"
+	"github.com/promise-language/forge/primitives/tooling"
 )
 
 func write(t *testing.T, dir, name, body string) {
@@ -1388,6 +1389,26 @@ func TestScaffoldedThresholdsCapEveryStarterMetric(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(baselinesJSON), &manifest); err != nil {
 		t.Fatalf("the emitted baselines do not parse: %v", err)
+	}
+}
+
+// The terms the scaffolder emits are terms the judge reads. It is checked
+// through the library's own loader rather than against a second spelling of the
+// vocabulary here: a scaffolder and a judge that each held their own idea of
+// what a term looks like is exactly the state this guards against, and a
+// freshly scaffolded project whose first `bin/run` cannot judge its own terms
+// is a project born broken.
+func TestTheScaffoldedTermsAreTermsTheJudgeReads(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, filepath.FromSlash(tooling.ThresholdsFile), thresholdsJSON)
+	write(t, root, filepath.FromSlash(tooling.BaselinesFile), baselinesJSON)
+
+	read, err := tooling.LoadTerms(root)
+	if err != nil {
+		t.Fatalf("the judge refuses the terms the scaffolder emits: %v", err)
+	}
+	if len(read.Caps) == 0 {
+		t.Error("the emitted thresholds carry no cap the judge could apply")
 	}
 }
 
