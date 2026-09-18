@@ -181,7 +181,7 @@ The hook is intentionally light, and that is a division of labour rather than a 
 
 ## The agent guard
 
-`bin/tool-guard` is the harness-level guard for Claude Code, wired in the project's committed `.claude/settings.json` on **both** tool-use events; why that file is committed where the commit-gate hook is not is [tools the project does not build](#tools-the-project-does-not-build). The file's text is the `settingsJSON` constant in [`cmd/init/main.go`](../cmd/init/main.go), which is what writes it; this document does not carry a second copy of it.
+`bin/tool-guard` is the harness-level guard for Claude Code, wired in the project's committed `.claude/settings.json` on **both** tool-use events; why that file is committed where the commit-gate hook is not is [tools the project does not build](#tools-the-project-does-not-build). The file's text is the `settingsJSON` constant in [`cmd/init/main.go`](../cmd/init/main.go), which is what emits it; this document does not carry a second copy of it.
 
 `PreToolUse` is the gate and fails closed; `PostToolUse` observes and fails quiet, because by then the tool has already run and an enforcing shape could only inject an error after a completed call. Which tools matter is the guard's decision, never a list in a settings file, so both events match every tool.
 

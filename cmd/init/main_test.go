@@ -249,7 +249,7 @@ func TestMissingIgnoreRulesReadsRulesNotText(t *testing.T) {
 //
 // The per-clone sibling one directory apart is why a matcher is not enough.
 // `.claude/settings.local.json` IS ignored, and widening that entry to
-// `.claude/` — the spelling every other per-clone entry uses — passes every
+// `.claude/` — the spelling `bin/` and `.workspace/` already carry — passes every
 // other check in this file: the settings file is still emitted, no .githooks/
 // appears, the wiring still parses, and every path in perClonePaths is still in
 // the .gitignore, because the test for that is derived from the same list.
