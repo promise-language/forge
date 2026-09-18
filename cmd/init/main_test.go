@@ -281,13 +281,22 @@ func TestFilesAreDistinctAndNonEmpty(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"make", "make.cmd", "tools/build/go.mod", ".githooks/pre-commit",
+		"make", "make.cmd", "tools/build/go.mod", "tools/build/go.sum",
 		"tools/build/cmd/gate/main.go", "tools/build/cmd/run/main.go",
 		"tools/gates/thresholds.json", "tools/gates/baselines.json",
 		"docs/index.md", ".claude/settings.json",
 	} {
 		if !seen[want] {
 			t.Errorf("%s is not scaffolded", want)
+		}
+	}
+	// The commit-gate hook is written by `workspace setup` alongside the
+	// bin/precommit-guard it names, so that one party owns both ends of the
+	// guard (docs/blueprint.md, The commit gate hook). A scaffolder that emitted
+	// it would put a copy of the guard's posture into every adopting repository.
+	for _, refused := range []string{".githooks/pre-commit", ".githooks"} {
+		if seen[refused] {
+			t.Errorf("%s is scaffolded; the commit-gate hook is provisioning's to write", refused)
 		}
 	}
 }
@@ -300,6 +309,152 @@ func TestScaffoldedGoModDeclaresTheFixedVersion(t *testing.T) {
 	}
 }
 
+// The pin is what the copies were replaced by (docs/primitives.md, The
+// dependency is pinned), so a scaffolded module must require forge at one exact
+// version — and its go.sum must name the SAME one. They are two files, and a
+// bump that edited one and not the other would leave a tree that does not
+// build, which is why the version is substituted from one constant rather than
+// typed into each body.
+func TestScaffoldedModulePinsForgeAtOneVersionInBothFiles(t *testing.T) {
+	require := "require github.com/promise-language/forge " + forgeVersion
+	mod := strings.ReplaceAll(goMod, "__FORGE_VERSION__", forgeVersion)
+	if !strings.Contains(mod, require) {
+		t.Errorf("the scaffolded go.mod does not pin forge:\n%s", mod)
+	}
+
+	sum := strings.ReplaceAll(goSum, "__FORGE_VERSION__", forgeVersion)
+	for _, want := range []string{
+		"github.com/promise-language/forge " + forgeVersion + " h1:",
+		"github.com/promise-language/forge " + forgeVersion + "/go.mod h1:",
+	} {
+		if !strings.Contains(sum, want) {
+			t.Errorf("the scaffolded go.sum has no %q line:\n%s", want, sum)
+		}
+	}
+	// Neither file may name a version the other does not. A stray pseudo-version
+	// left behind by a half-finished bump is exactly what this catches.
+	for _, body := range []struct{ name, text string }{{"go.mod", mod}, {"go.sum", sum}} {
+		for _, field := range strings.Fields(body.text) {
+			if strings.HasPrefix(field, "v0.0.0-") && strings.TrimSuffix(field, "/go.mod") != forgeVersion {
+				t.Errorf("%s names %q, not the one pinned version %q", body.name, field, forgeVersion)
+			}
+		}
+	}
+}
+
+// A published version is immutable and a pseudo-version cannot name a commit
+// that does not exist yet, so the pin is always a commit already on the remote.
+// The shape is what this checks: v0.0.0-<utc timestamp>-<12 hex digits>.
+func TestThePinnedVersionIsAPseudoVersion(t *testing.T) {
+	rest, ok := strings.CutPrefix(forgeVersion, "v0.0.0-")
+	if !ok {
+		t.Fatalf("the pinned version %q is not a pseudo-version", forgeVersion)
+	}
+	stamp, hash, ok := strings.Cut(rest, "-")
+	if !ok {
+		t.Fatalf("the pinned version %q carries no commit hash", forgeVersion)
+	}
+	if len(stamp) != 14 {
+		t.Errorf("the pinned version's timestamp %q is not 14 digits", stamp)
+	}
+	if len(hash) != 12 {
+		t.Errorf("the pinned version's hash %q is not 12 digits", hash)
+	}
+	for _, c := range stamp + hash {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			t.Errorf("the pinned version %q carries %q, which is not hex", forgeVersion, c)
+		}
+	}
+}
+
+// Every helper primitives carries is gone from what is emitted. A project that
+// held its own would be holding a latent disagreement with every other one
+// (docs/primitives.md, One implementation), and the copies had already drifted:
+// the emitted hash named each file relative to the directory it was found under
+// where primitives names it from the repo root, so the two computed different
+// digests for the same tree.
+func TestNoEmittedFileRedeclaresAHelperPrimitivesCarries(t *testing.T) {
+	lifted := []string{
+		"func ToolsSourceHash(", "func SourceHash(",
+		"func StaleReason(", "func CheckStale(", "func MakeCmd(",
+		"func IsWindows(", "func ExeSuffix(", "func BinaryName(",
+		"func Which(", "func Exists(",
+		"func RunIn(", "func RunInStreams(", "func RunOutputIn(",
+		"func OutputBytesIn(", "func RunSilent(",
+		"func NormalizeArgs(", "func HasHelpFlag(", "func MaybeHelp(",
+		"func RunSetup(",
+	}
+	for _, f := range files() {
+		for _, decl := range lifted {
+			if strings.Contains(f.body, decl) {
+				t.Errorf("%s declares %q, which primitives carries", f.path, decl)
+			}
+		}
+	}
+	// The one record both ends of the verified-tree contract must agree on is
+	// primitives.VerifiedTreeRecord, imported rather than typed (docs/
+	// primitives.md, What belongs here). A second spelling is a permanent,
+	// silent refusal: verify writes one path and the guard reads another.
+	for _, f := range files() {
+		if strings.HasSuffix(f.path, ".go") && strings.Contains(f.body, `= ".workspace/verified-tree"`) {
+			t.Errorf("%s types the verified-tree path instead of importing the constant", f.path)
+		}
+	}
+}
+
+// No emitted tool reads os.Args for itself: what it parses, how it renders and
+// what it exits with are the command library's (docs/command-line.md, One
+// implementation). A parser written per tool disagrees with the guide in its own
+// way, and the disagreements are the kind nothing tests.
+func TestEveryEmittedToolIsBuiltOnTheCommandLibrary(t *testing.T) {
+	var mains int
+	for _, f := range files() {
+		if !strings.HasPrefix(f.path, "tools/build/cmd/") {
+			continue
+		}
+		mains++
+		if !strings.Contains(f.body, "primitives/command") {
+			t.Errorf("%s is not built on the command library", f.path)
+		}
+		if !strings.Contains(f.body, "command.Run(define(") {
+			t.Errorf("%s does not hand its invocation to the library", f.path)
+		}
+		// -h is an abbreviation, and the library makes an abbreviation unknown
+		// input rather than a flag. A tool advertising it sends a reader to an
+		// invocation that exits 2.
+		if strings.Contains(f.body, `"-h"`) || strings.Contains(f.body, "§-h§") {
+			t.Errorf("%s spells help -h, which the library refuses as unknown input", f.path)
+		}
+	}
+	if mains != 5 {
+		t.Errorf("checked %d mains, want the 5 every project builds", mains)
+	}
+}
+
+// Staleness reaches a tool as a refusal the library writes, with the recovery
+// named — not as a check that calls os.Exit and leaves prose on stderr
+// (docs/command-line.md, Exit status and refusal). make is the exception: it is
+// the recovery every refusal names, so a Fit on it would close the way out.
+func TestEveryEmittedToolButTheBuilderRefusesWhenStale(t *testing.T) {
+	for _, f := range files() {
+		rest, ok := strings.CutPrefix(f.path, "tools/build/cmd/")
+		if !ok {
+			continue
+		}
+		name := strings.SplitN(rest, "/", 2)[0]
+		declares := strings.Contains(f.body, "primitives.StaleRefusal(")
+		if name == "make" {
+			if declares {
+				t.Error("the meta-builder can refuse as stale, which closes the recovery it is")
+			}
+			continue
+		}
+		if !declares {
+			t.Errorf("%s does not refuse when its binary is stale", f.path)
+		}
+	}
+}
+
 // scaffold lays the tree down in a fresh temp dir and returns it.
 func scaffold(t *testing.T) string {
 	t.Helper()
@@ -309,7 +464,40 @@ func scaffold(t *testing.T) string {
 		writeFile(dir, f, mod, false)
 	}
 	ensureGitignore(dir)
+	buildAgainstThisTree(t, dir)
 	return dir
+}
+
+// buildAgainstThisTree points the scaffolded module's forge dependency at this
+// working tree, and it is the one thing the test does to what the scaffolder
+// wrote.
+//
+// What an adopter gets is the pin, and TestScaffoldedModulePinsForgeAtOneVersion
+// InBothFiles is what holds it. Building the temp tree against the PUBLISHED
+// version instead would ask a different and weaker question — whether the
+// scaffolder's output compiles against a version cut before this change — and
+// would answer it only on a machine with the module cached or a network to
+// fetch it. Replacing it asks the question that catches a regression: does what
+// cmd/init emits today compile against the primitives in this commit. It is the
+// same accommodation this repository's own tools/build makes, for the same
+// reason (docs/primitives.md, This repository is its own first consumer).
+func buildAgainstThisTree(t *testing.T, dir string) {
+	t.Helper()
+	forgeRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "tools", "build", "go.mod")
+	body := read(t, path)
+	body += "\nreplace github.com/promise-language/forge => " + filepath.ToSlash(forgeRoot) + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A path replacement is not described by any go.sum, so the emitted sums
+	// no longer apply to the module being built and go refuses them.
+	if err := os.Remove(filepath.Join(dir, "tools", "build", "go.sum")); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // The whole point of the scaffolder is that what it writes runs. This lays the
@@ -366,20 +554,34 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 		t.Errorf(".workspace/verified-tree does not hold one tree id: %q", record)
 	}
 
-	// `gate --list` is how anything outside the tree discovers what this
-	// project answers, and both required names must be in it.
+	// `gate --list` is how anything outside the tree discovers what this project
+	// answers, and both required names must be in it.
+	//
+	// Through a pipe it is JSON, because that is what a program reads and what
+	// can grow additively; one name per line is the rendering for a person at a
+	// terminal (org/cli-guide.md, Output modes). This test is the program, so it
+	// parses the object rather than the lines — an orchestrator that split this
+	// stream on newlines would be reading the human form it never receives.
 	list := run(filepath.Join(dir, "bin", "gate"), "--list")
-	for _, want := range []string{"integration", "fit"} {
-		if !slices.Contains(strings.Fields(list), want) {
-			t.Errorf("bin/gate --list does not name %q:\n%s", want, list)
-		}
+	var listed struct {
+		Gates []struct {
+			Name    string `json:"name"`
+			Summary string `json:"summary"`
+		} `json:"gates"`
 	}
-	// One name per line, because that is what an orchestrator parses. A usage
-	// paragraph that happened to mention both names would satisfy the check
-	// above and nothing downstream.
-	for _, line := range strings.Split(strings.TrimSpace(list), "\n") {
-		if len(strings.Fields(line)) != 1 {
-			t.Errorf("bin/gate --list printed a line that is not one name: %q", line)
+	if err := json.Unmarshal([]byte(list), &listed); err != nil {
+		t.Fatalf("bin/gate --list through a pipe is not one JSON object: %v\n%s", err, list)
+	}
+	var names []string
+	for _, g := range listed.Gates {
+		if g.Summary == "" {
+			t.Errorf("bin/gate --list names %q with no summary", g.Name)
+		}
+		names = append(names, g.Name)
+	}
+	for _, want := range []string{"integration", "fit"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("bin/gate --list does not name %q:\n%s", want, list)
 		}
 	}
 
@@ -435,13 +637,14 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 	// Every way out of bin/gate that is not a complete envelope leaves stdout
 	// empty and exits non-zero — a caller redirecting stdout to a parser gets an
 	// envelope or nothing, and "nothing" must not look like success. The emitted
-	// unit tests deliberately stop at the argument parsing and leave this to
-	// cmd/gate, so the boundary is the only place it is visible.
+	// unit tests measure and judge, and leave the invocation surface to the
+	// library, so the process boundary is the only place this is visible.
 	t.Run("a refusing gate writes nothing to stdout", func(t *testing.T) {
 		for _, args := range [][]string{
-			{"fit"},                        // measurements with no verdict, read as a pass by the first wrapper
-			{"no-such-gate", "--envelope"}, // an empty envelope, read as a clean result
-			{"-help"},                      // usage, which here goes to stderr unlike every other tool
+			{"fit"},                         // measurements with no verdict, read as a pass by the first wrapper
+			{"no-such-gate", "--envelope"},  // an empty envelope, read as a clean result
+			{"--bogus"},                     // an unknown flag, which must not be dropped in silence
+			{"fit", "tested", "--envelope"}, // two gates, where a runner asked for one answer
 		} {
 			cmd := exec.Command(filepath.Join(dir, "bin", "gate"), args...)
 			cmd.Dir = dir
@@ -456,6 +659,105 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 			if stderr.Len() == 0 {
 				t.Errorf("gate %v refused without saying why", args)
 			}
+		}
+	})
+
+	// Every tool answers -help on stdout and exits 0, gate included. That is a
+	// change of behaviour the library brought: a scaffolded gate used to print
+	// usage to stderr and exit 1, so the one invocation a person tries when they
+	// do not know a tool looked like a failure (org/cli-guide.md, Exit codes).
+	// -h is not a second spelling of it — an abbreviation is unknown input.
+	t.Run("every tool answers -help and refuses -h", func(t *testing.T) {
+		for _, tool := range []string{"verify", "setup", "gate", "run"} {
+			bin := filepath.Join(dir, "bin", tool)
+
+			cmd := exec.Command(bin, "-help")
+			cmd.Dir = dir
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Errorf("%s -help exited non-zero: %v (%q)", tool, err, stderr.String())
+			}
+			if stdout.Len() == 0 {
+				t.Errorf("%s -help wrote no usage to stdout", tool)
+			}
+
+			abbrev := exec.Command(bin, "-h")
+			abbrev.Dir = dir
+			abbrev.Stdout, abbrev.Stderr = &bytes.Buffer{}, &bytes.Buffer{}
+			if err := abbrev.Run(); err == nil {
+				t.Errorf("%s -h was accepted; an abbreviation is unknown input", tool)
+			}
+		}
+	})
+
+	// A tool whose binary no longer matches its source refuses, naming the
+	// recovery, rather than measuring this tree with yesterday's logic and
+	// printing a well-formed answer about it — the one failure nothing
+	// downstream could detect. Emitting a copy of the staleness check was what
+	// used to make this an os.Exit and a line of prose; it is now a refusal the
+	// library writes, and the status is what a caller reads.
+	//
+	// Both halves of the rule are checked, because they differ: a refusal is an
+	// object on stdout, EXCEPT where a protocol flag has claimed that stream for
+	// a contract of its own, and there it travels as the status and the stderr
+	// line alone — anything else on that stream would read to the runner
+	// parsing it as the gate's own defect.
+	t.Run("a stale binary refuses and names the recovery", func(t *testing.T) {
+		touched := filepath.Join(dir, "tools", "build", "common", "stale_marker.go")
+		if err := os.WriteFile(touched, []byte("package common\n\n// changed after the build\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(touched)
+
+		refuse := func(t *testing.T, tool string, args ...string) (int, string, string) {
+			t.Helper()
+			cmd := exec.Command(filepath.Join(dir, "bin", tool), args...)
+			cmd.Dir = dir
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			err := cmd.Run()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) {
+				t.Fatalf("a stale %s did not refuse: %v (%q)", tool, err, stderr.String())
+			}
+			if exit.ExitCode() != command.StatusRefused {
+				t.Errorf("a stale %s exited %d, want the refusal status %d",
+					tool, exit.ExitCode(), command.StatusRefused)
+			}
+			return exit.ExitCode(), stdout.String(), stderr.String()
+		}
+
+		// An ordinary invocation: the refusal is the object, so a caller can tell
+		// a stale toolchain from a failing tree without matching prose.
+		_, stdout, stderr := refuse(t, "run", "fit")
+		var refusal struct {
+			Refusal  string   `json:"refusal"`
+			Tool     string   `json:"tool"`
+			Recovery []string `json:"recovery"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &refusal); err != nil {
+			t.Fatalf("a stale run's stdout is not a refusal object: %v\n%s", err, stdout)
+		}
+		if refusal.Refusal != command.Stale {
+			t.Errorf("the refusal is %q, want %q", refusal.Refusal, command.Stale)
+		}
+		if len(refusal.Recovery) == 0 {
+			t.Error("the refusal names no recovery, so nothing tells the caller what to run")
+		}
+		if stderr == "" {
+			t.Error("the refusal said nothing on stderr, where a person reads it")
+		}
+
+		// The envelope's stream belongs to the gate contract, so a refusal
+		// leaves it empty rather than putting something there that is not an
+		// envelope.
+		_, stdout, stderr = refuse(t, "gate", "fit", "--envelope")
+		if stdout != "" {
+			t.Errorf("a stale gate wrote %q to the envelope's stream", stdout)
+		}
+		if stderr == "" {
+			t.Error("a stale gate refused without saying why")
 		}
 	})
 
@@ -579,106 +881,20 @@ func keysOf(m map[string]bool) []string {
 	return out
 }
 
-// The hook names the workspace commit gate and no local twin of it, gives the
-// recovery for a provisioned checkout, and names this project's own gate for a
-// checkout that never opted in.
-func TestScaffoldedHookNamesTheWorkspaceCommitGate(t *testing.T) {
-	for _, want := range []string{"bin/precommit-guard", "workspace update", "bin/verify", ".workspace/project.json"} {
-		if !strings.Contains(preCommitHook, want) {
-			t.Errorf("the pre-commit hook does not mention %q", want)
-		}
-	}
-	for _, twin := range []string{"bin/precommit\"", "bin/precommit ", "bin/guard"} {
-		if strings.Contains(preCommitHook, twin) {
-			t.Errorf("the pre-commit hook still names the local twin %q", twin)
-		}
-	}
-}
-
-// The hook's three branches, run as the shell runs them. Which branch a
-// checkout takes is the judgement this layout rests on — fail closed where the
-// project opted into a workspace, and get out of the way where it did not — and
-// reading the text for substrings cannot tell a correct branch from an inverted
-// one.
-func TestScaffoldedHookBranchesOnWhatTheCheckoutOptedInto(t *testing.T) {
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("no bash on this machine")
-	}
-	// hook lays the trampoline down in a fresh root and runs it, returning the
-	// exit code and what it said.
-	hook := func(t *testing.T, setup func(root string)) (int, string) {
-		t.Helper()
-		root := t.TempDir()
-		write(t, root, ".githooks/pre-commit", preCommitHook)
-		if err := os.Chmod(filepath.Join(root, ".githooks", "pre-commit"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		setup(root)
-		cmd := exec.Command("bash", filepath.Join(root, ".githooks", "pre-commit"))
-		cmd.Dir = root
-		out, err := cmd.CombinedOutput()
-		code := 0
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			code = exit.ExitCode()
-		} else if err != nil {
-			t.Fatalf("running the hook: %v", err)
-		}
-		return code, string(out)
-	}
-
-	// The guard is installed: the hook execs it and adds nothing of its own.
-	code, out := hook(t, func(root string) {
-		write(t, root, "bin/precommit-guard", "#!/usr/bin/env bash\necho GUARD RAN\nexit 3\n")
-		if err := os.Chmod(filepath.Join(root, "bin", "precommit-guard"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if code != 3 || !strings.Contains(out, "GUARD RAN") {
-		t.Errorf("an installed guard was not exec'd: exit %d, output %q", code, out)
-	}
-
-	// Provisioned, guard missing: refuse, and name the recovery. This is the
-	// fail-closed case, and it is the one an inverted condition would lose.
-	code, out = hook(t, func(root string) {
-		write(t, root, ".workspace/project.json", "{}\n")
-	})
-	if code == 0 {
-		t.Errorf("a provisioned checkout with no guard allowed the commit: %q", out)
-	}
-	if !strings.Contains(out, "workspace update") {
-		t.Errorf("the refusal does not name the recovery: %q", out)
-	}
-
-	// Never opted in: nothing was promised, so the hook names this project's own
-	// gate and lets the commit through rather than demanding a tool the adopter
-	// cannot obtain.
-	code, out = hook(t, func(string) {})
-	if code != 0 {
-		t.Errorf("a checkout that adopted no workspace was blocked: exit %d, %q", code, out)
-	}
-	if !strings.Contains(out, "bin/verify") {
-		t.Errorf("the hook does not name this project's gate: %q", out)
-	}
-}
-
-// One hook text, used by this repository and by everything it scaffolds. A
-// scaffolder whose output differs from what its own author runs is prescribing
-// something nobody has tried (docs/primitives.md, This repository is its own first consumer).
-func TestScaffoldedHookIsTheHookThisRepositoryRuns(t *testing.T) {
-	own := read(t, filepath.Join("..", "..", ".githooks", "pre-commit"))
-	if own != preCommitHook {
-		t.Errorf("this repository's .githooks/pre-commit and the emitted one differ:\n--- own ---\n%s\n--- emitted ---\n%s", own, preCommitHook)
-	}
-}
-
 // The wiring cmd/init commits into a target repository has one home, and it is
 // the constant that emits it (docs/blueprint.md, The agent guard): "The file's
 // text is the settingsJSON constant in cmd/init/main.go, which is what writes
 // it; this document does not carry a second copy of it", because "a prose copy
-// of the wiring is the first place the two spellings part company". The two
-// tests above fix what the constants say; this one fixes that they are the only
-// place saying it.
+// of the wiring is the first place the two spellings part company".
+// TestScaffoldedSettingsWireTheGuardOnBothEvents fixes what that constant says;
+// this one fixes that it is the only place saying it.
+//
+// The set is derived from files() by path prefix rather than listed here, so
+// what counts as wiring follows what is emitted. That is what made removing
+// .githooks/pre-commit from the emitted set narrow this check to the agent
+// guard without an edit: the commit-gate hook is written by `workspace setup`
+// alongside the binary it names (docs/blueprint.md, The commit gate hook), so it
+// is no longer wiring this repository states at all.
 //
 // A pasted copy reads as documentation right up to the day the two spellings
 // differ, and then it is the copy a reader believes — so nothing announces the
@@ -733,7 +949,11 @@ func TestDocumentsCarryingReportsAPastedCopy(t *testing.T) {
 	if len(found) != 1 {
 		t.Fatalf("reported %d copies, want the one in docs/guide.md: %v", len(found), found)
 	}
-	if !strings.Contains(found[0], "docs/guide.md") || !strings.Contains(found[0], wiring[0]) {
+	// The line is named as the report renders it — quoted, so a line carrying
+	// quotes of its own reads unambiguously. Comparing against the bare text
+	// only happened to work while the first wiring line was shell with nothing
+	// %q escapes; the agent guard's is JSON, and every line of it has quotes.
+	if !strings.Contains(found[0], "docs/guide.md") || !strings.Contains(found[0], fmt.Sprintf("%q", wiring[0])) {
 		t.Errorf("the report names neither the document nor the line: %q", found[0])
 	}
 }
@@ -879,13 +1099,42 @@ func starterMetricNames() []string {
 }
 
 // The emitted docs index carries no relative link, so a scaffolded tree cannot
-// fail a documentation link check on the scaffolder's own output.
+// fail a documentation link check on the scaffolder's own output. That is also
+// what lets it name docs/org/ before a sync has put anything there.
 func TestScaffoldedDocsAreLinkClean(t *testing.T) {
 	if strings.Contains(docsIndexMd, "](") {
 		t.Errorf("docs/index.md carries a link, which must resolve to a file the adopter does not have yet:\n%s", docsIndexMd)
 	}
 	if !strings.HasPrefix(docsIndexMd, "# ") {
 		t.Errorf("docs/index.md has no title:\n%s", docsIndexMd)
+	}
+}
+
+// A scaffolded project is born conformant with the one docs structure every
+// managed project holds. org/normative.md, Location makes the index name the
+// project's status query — "the one per-project fact this shared document cannot
+// carry" — and list docs/org/ once, as the directory. An index that named
+// neither would make every tree this scaffolder writes non-conformant from its
+// first commit.
+func TestScaffoldedDocsIndexNamesTheStatusQueryAndTheCorpus(t *testing.T) {
+	for _, want := range []string{
+		"gh issue list --label",
+		"--state open",
+		"--limit 200",
+		"## Organization wide corpus",
+		"docs/org/stamp.json",
+	} {
+		if !strings.Contains(docsIndexMd, want) {
+			t.Errorf("the emitted docs/index.md does not carry %q:\n%s", want, docsIndexMd)
+		}
+	}
+	// Listed once, as the directory. A per-file list would be a second copy of
+	// the stamp's own membership, and a sync would then have to edit a file the
+	// project owns.
+	for _, member := range []string{"org/normative.md", "org/cli-guide.md", "org/engineering-guide.md"} {
+		if strings.Contains(docsIndexMd, member) {
+			t.Errorf("the emitted docs/index.md lists corpus member %q; the stamp names the members", member)
+		}
 	}
 }
 

@@ -4,27 +4,35 @@
 //
 //	go run github.com/promise-language/forge/cmd/init@latest [target-dir] [-force]
 //
-// It lays down a self-contained, runnable tooling tree:
+// It lays down a runnable tooling tree:
 //
 //   - ./make, ./make.cmd                  bootstrap trampolines (committed shell text)
-//   - tools/build/go.mod                  island Go module for the dev tools
-//   - tools/build/common/                 helper package (hash, stale, exec, verify, gate, run, …)
+//   - tools/build/go.mod, go.sum          the tools module, pinning forge at one version
+//   - tools/build/common/                 what is the project's: the verify pipeline,
+//     the gate set and the judging terms
 //   - tools/build/cmd/make/main.go        the meta-builder (runs via `go run`)
 //   - tools/build/cmd/<tool>/main.go      one binary per dir: verify, setup, gate, run
 //   - tools/gates/                        the judging terms: thresholds and baselines
 //   - docs/index.md                       the map of docs/
-//   - .githooks/pre-commit                git hook trampoline → bin/precommit-guard
 //   - .claude/settings.json               wires bin/tool-guard on both tool-use events
 //   - .gitignore                          adds every per-clone path (bin/, .workspace/, …)
 //   - CLAUDE.md                           appends a "Dev tooling" section so agents
 //     discover the ./make → bin/verify workflow
 //
-// It emits no twin of a tool the workspace is accountable for: precommit-guard
-// and tool-guard are named by the committed hooks and installed by `workspace
-// setup`, never built here (docs/blueprint.md, Tools the project does not build).
+// It copies no helper primitives carries: the hash, the staleness refusal, OS
+// detection, exec, the invocation surface and the hook wiring arrive as the one
+// pinned dependency (docs/primitives.md, One implementation and The dependency
+// is pinned).
 //
-// After init exits, the target repo owns every file. Forge is not a runtime
-// dependency unless the project explicitly imports primitives/.
+// It emits no twin of a tool the workspace is accountable for, and no wiring
+// that reaches one it does not own: `.claude/settings.json` names bin/tool-guard
+// because a fresh clone must carry it, while `.githooks/pre-commit` is written
+// by `workspace setup` alongside the bin/precommit-guard it names — one party
+// owns the guard and the wiring that reaches it (docs/blueprint.md, Tools the
+// project does not build and The commit gate hook).
+//
+// After init exits, the target repo owns every line it wrote. What it does not
+// own is the machinery, which arrives at the pinned version its go.mod names.
 //
 // The chain has no compile-the-compiler cycle: ./make is shell text, the
 // meta-builder runs via `go run` (needing only the Go toolchain), and it
@@ -44,7 +52,7 @@ import (
 
 type file struct {
 	path string // relative to the target dir
-	body string // __MODULE__ is replaced with the tools module path
+	body string // placeholders (see writeFile) are substituted before writing
 	exec bool   // chmod +x after writing
 }
 
@@ -87,7 +95,7 @@ func (r result) Human(w io.Writer) error {
 	}
 	if r.notGit {
 		b.WriteString("\nnote: this is not a git repository yet.\n")
-		b.WriteString("      run 'git init' so ./make can wire up the pre-commit hook.\n")
+		b.WriteString("      run 'git init' so ./make can point git at .githooks.\n")
 	}
 	b.WriteString(`
 Done. Next steps:
@@ -96,10 +104,11 @@ Done. Next steps:
   bin/gate --list   # the measurements this project answers
   bin/run fit       # measure one gate and judge what it measured
 
-Two tools the committed hooks name are NOT built here: bin/precommit-guard
-and bin/tool-guard belong to the workspace that manages a project, and
-'workspace setup' installs them. Until then .githooks/pre-commit names
-bin/verify as this project's gate, and commits are not blocked.
+This project's gate is bin/verify, and nothing runs it on 'git commit' until
+provisioning has been here: 'workspace setup' installs bin/precommit-guard and
+bin/tool-guard, and writes the .githooks/pre-commit that reaches the first of
+them. The committed .claude/settings.json names bin/tool-guard, so a fresh
+clone carries that wiring; neither binary is built here.
 
 Then edit tools/build/common/verify.go to run your project's real
 format / build / test commands, tools/build/common/gate.go for what this
@@ -204,6 +213,11 @@ func rootModulePath(absTarget string) string {
 	return ""
 }
 
+// writeFile lays one file down, substituting the two placeholders an emitted
+// body may carry: __MODULE__, the tools module path this target gets, and
+// __FORGE_VERSION__, the version its go.mod pins forge at. The version is
+// substituted rather than written into each body so go.mod and go.sum cannot
+// name different ones — see forgeVersion.
 func writeFile(absTarget string, f file, mod string, force bool) (written, error) {
 	dst := filepath.Join(absTarget, f.path)
 	if exists(dst) && !force {
@@ -213,6 +227,7 @@ func writeFile(absTarget string, f file, mod string, force bool) (written, error
 		return written{}, err
 	}
 	body := strings.ReplaceAll(f.body, "__MODULE__", mod)
+	body = strings.ReplaceAll(body, "__FORGE_VERSION__", forgeVersion)
 	if err := os.WriteFile(dst, []byte(body), 0o644); err != nil {
 		return written{}, err
 	}
@@ -329,12 +344,8 @@ func files() []file {
 		{path: "make", body: makeSh, exec: true},
 		{path: "make.cmd", body: makeCmd},
 		{path: "tools/build/go.mod", body: goMod},
-		{path: "tools/build/common/platform.go", body: platformGo},
-		{path: "tools/build/common/exec.go", body: execGo},
-		{path: "tools/build/common/args.go", body: argsGo},
-		{path: "tools/build/common/hash.go", body: hashGo},
-		{path: "tools/build/common/stale.go", body: staleGo},
-		{path: "tools/build/common/setup.go", body: setupGo},
+		{path: "tools/build/go.sum", body: goSum},
+		{path: "tools/build/common/commands.go", body: commandsGo},
 		{path: "tools/build/common/verify.go", body: verifyGo},
 		{path: "tools/build/common/verifiedtree.go", body: verifiedTreeGo},
 		{path: "tools/build/common/gate.go", body: gateGo},
@@ -348,7 +359,6 @@ func files() []file {
 		{path: "tools/gates/thresholds.json", body: thresholdsJSON},
 		{path: "tools/gates/baselines.json", body: baselinesJSON},
 		{path: "docs/index.md", body: docsIndexMd},
-		{path: ".githooks/pre-commit", body: preCommitHook, exec: true},
 		{path: ".claude/settings.json", body: settingsJSON},
 	}
 }
@@ -389,6 +399,8 @@ const buildDocRaw = buildDocMarker + `
 
 Dev tools are compiled from a single in-repo Go module (§tools/build/§) into
 §bin/§, which is gitignored — the tools are always built locally, never committed.
+The module pins §github.com/promise-language/forge§ at one exact version, which
+is where the harness under these tools comes from; nothing here is a copy of it.
 
 **Fresh clone — bootstrap once:**
 
@@ -396,7 +408,7 @@ Dev tools are compiled from a single in-repo Go module (§tools/build/§) into
 ./make            # Windows: .\make.cmd
 §§§
 
-§./make§ compiles every tool into §bin/§ and wires up the git pre-commit hook.
+§./make§ compiles every tool into §bin/§ and points git at §.githooks§.
 It is idempotent and finishes in well under a second once built.
 
 **Before every commit — run the gate:**
@@ -408,7 +420,9 @@ bin/verify        # format → vet → build → test → record, then a pass/FA
 A green "OK to Commit" line means it is safe to commit; a red FAIL means it is
 not. Its last step records the tree it blessed at §.workspace/verified-tree§,
 which is what the commit gate (§bin/precommit-guard§, installed by the workspace
-rather than built here) reads to refuse a commit of any other tree.
+rather than built here) reads to refuse a commit of any other tree. Until
+provisioning has installed that guard and written §.githooks/pre-commit§,
+nothing runs on §git commit§ — §bin/verify§ is still the gate, run by hand.
 
 **Measure one thing, or ask what can be measured:**
 
@@ -429,384 +443,273 @@ under §tools/build/cmd/§ and re-running §./make§ — no registration step.
 <!-- /forge:dev-tooling -->
 `
 
-// preCommitHook is the committed git hook, and it is the SAME TEXT this
-// repository runs at .githooks/pre-commit. One text, because a scaffolder whose
-// output differs from what its own author uses is prescribing something nobody
-// has tried (docs/primitives.md, This repository is its own first consumer).
-//
-// It names bin/precommit-guard, a workspace tool, and builds no local twin of it
-// (docs/blueprint.md, Tools the project does not build). It fails closed onto
-// that tool only where the checkout
-// opted in — the marker .workspace/project.json — because the workspace
-// repository is private, and an unconditional refusal would block a public
-// adopter's first commit on a recovery they cannot perform. Where there is no
-// marker the project's gate is bin/verify, and the hook says so.
-const preCommitHook = `#!/usr/bin/env bash
-# Git pre-commit trampoline — execs the workspace commit guard, or names the
-# gate to run instead. Wired up by 'git config core.hooksPath .githooks', which
-# ./make runs for you.
-#
-# bin/precommit-guard is a WORKSPACE tool, not one ./make builds: a project may
-# not build a twin of a tool the workspace is accountable for (tool-contract §5
-# — one name, one builder), so this hook names it directly and never falls back
-# to a local copy.
-#
-# It fails closed where the project opted in, and only there. The marker
-# .workspace/project.json is what provisioning writes, so its presence is this
-# checkout's own statement that a workspace manages it: with the marker, a
-# missing guard refuses the commit and names the recovery. Without it nothing
-# was promised (tool-contract §1 — fail-closed is a consequence of having opted
-# in, never a tax on a repo that did not), the project's gate is bin/verify, and
-# this hook says so and gets out of the way rather than demanding a tool the
-# adopter cannot obtain.
-set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
-if [ -x "$root/bin/precommit-guard" ]; then
-    exec "$root/bin/precommit-guard"
-fi
-if [ -f "$root/.workspace/project.json" ]; then
-    echo "pre-commit: this checkout is provisioned but bin/precommit-guard is missing —" >&2
-    echo "            run 'workspace update' (or 'workspace setup'), then commit" >&2
-    exit 1
-fi
-echo "pre-commit: no workspace commit guard is installed here; the gate in this project" >&2
-echo "            is bin/verify — run it before committing" >&2
-`
-
 // ───────────────────────── tools module ─────────────────────────
+
+// forgeVersion is the version of forge a scaffolded project pins, and it is
+// written down once: both go.mod and go.sum carry __FORGE_VERSION__ and
+// writeFile substitutes it, so the two files cannot name different versions and
+// a half-finished bump does not reach an adopter.
+//
+// It names an ALREADY PUBLISHED commit, and necessarily so: a pseudo-version
+// does not exist until the commit it names does, so the pin can never be the
+// change that raises it. Raising it is an edit here — the deliberate, central
+// act docs/primitives.md, The dependency is pinned describes — together with
+// the two sums below, which are facts about the published module and cannot be
+// derived from the version string.
+const forgeVersion = "v0.0.0-20260918010348-db3e0f44c28f"
 
 // The tools module declares one Go version, the same in every project that
 // adopts this layout. It is not derived from the target and not a floor the
 // target may raise: a version that varies per project is a variation in the
 // tools themselves, and the tools exist to not vary. Raising it is an edit
 // here, which every project then gets by adopting it.
+//
+// The single require is the whole of what a project's tooling depends on. The
+// module is otherwise an island by design, and that is unchanged by there being
+// exactly one entry in it (docs/primitives.md, The dependency is pinned).
 const goMod = `module __MODULE__
 
 go 1.26
+
+require github.com/promise-language/forge __FORGE_VERSION__
 `
 
-const platformGo = `package common
-
-import (
-	"os"
-	"os/exec"
-	"runtime"
-)
-
-// IsWindows reports whether the host OS is Windows.
-func IsWindows() bool { return runtime.GOOS == "windows" }
-
-// ExeSuffix is ".exe" on Windows, "" elsewhere.
-func ExeSuffix() string {
-	if IsWindows() {
-		return ".exe"
-	}
-	return ""
-}
-
-// BinaryName appends the platform executable suffix to a tool name.
-func BinaryName(name string) string { return name + ExeSuffix() }
-
-// Which resolves a command in PATH, returning "" if it is not found.
-func Which(cmd string) string {
-	p, err := exec.LookPath(cmd)
-	if err != nil {
-		return ""
-	}
-	return p
-}
-
-// Exists reports whether a path exists.
-func Exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-`
-
-const execGo = `package common
-
-import (
-	"os"
-	"os/exec"
-	"strings"
-)
-
-// RunIn runs name+args in dir with stdout/stderr/stdin attached to the parent.
-func RunIn(dir, name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
-}
-
-// RunOutputIn runs name+args in dir and returns trimmed stdout.
-func RunOutputIn(dir, name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err
-}
-
-// OutputBytesIn runs name+args in dir and returns raw, untrimmed stdout bytes.
-// Use this instead of RunOutputIn when the output may be binary (e.g. reading a
-// blob with 'git cat-file'), where trimming whitespace would corrupt content.
-func OutputBytesIn(dir, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	return cmd.Output()
-}
-
-// RunSilent runs name+args with output discarded.
-func RunSilent(name string, args ...string) error {
-	return exec.Command(name, args...).Run()
-}
-`
-
-const argsGo = `package common
-
-import "strings"
-
-// NormalizeArgs collapses long flags (--foo) to short form (-foo) so callers
-// can accept either spelling. Values after = are preserved.
-func NormalizeArgs(args []string) []string {
-	out := make([]string, len(args))
-	for i, a := range args {
-		if strings.HasPrefix(a, "--") {
-			out[i] = a[1:]
-		} else {
-			out[i] = a
-		}
-	}
-	return out
-}
-
-// HasHelpFlag reports whether args request usage.
+// goSum is the checksum half of the pin. It is emitted rather than left for the
+// adopter to generate because `go build` refuses a module whose requirements
+// have no go.sum entry, so a tree without it does not bootstrap: the first
+// ./make would fail before it compiled anything.
 //
-// The name is -help and only -help. Both prefixes are the same flag, so
-// --help and -help both match after NormalizeArgs; -h and --h do not, because
-// an abbreviation is not a flag at all but unknown input (cli-guide's Flag form
-// and Fail closed).
-func HasHelpFlag(args []string) bool {
-	for _, a := range NormalizeArgs(args) {
-		if a == "-help" {
-			return true
-		}
-	}
-	return false
-}
+// A published version is immutable and its content is verified against these
+// two lines, which is what makes the pin as fixed as a vendored copy was
+// (docs/primitives.md, The dependency is pinned).
+const goSum = `github.com/promise-language/forge __FORGE_VERSION__ h1:ngVvT/okx86hdw3ra5zM4WfHB9ON6/UMOnmw3Dk7390=
+github.com/promise-language/forge __FORGE_VERSION__/go.mod h1:8tJTV2+mUBiMoK9NioLoXsJGu0y5eKVp9OWmCg3/hk0=
 `
 
-const hashGo = `package common
+// commandsGo answers what this project builds, by looking rather than by
+// reading a list someone maintained. It is one function because two callers ask
+// it — the meta-builder, to know what to compile, and `run --list`, to say what
+// this project offers — and a second copy would be a list to keep in step with
+// the first.
+const commandsGo = `package common
 
 import (
-	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
-// ToolsSourceHash computes an FNV-128a hash over every .go/go.mod/go.sum file
-// under <repoRoot>/tools/build. It is stable across runs and platforms, and is
-// what the meta-builder bakes into each binary to drive the staleness check.
-// The per-file size delimiter prevents file-boundary collisions.
-func ToolsSourceHash(repoRoot string) (string, error) {
-	base := filepath.Join(repoRoot, "tools", "build")
-	var files []string
-	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasSuffix(name, ".go") || name == "go.mod" || name == "go.sum" {
-			files = append(files, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	sort.Strings(files)
-
-	h := fnv.New128a()
-	for _, path := range files {
-		rel, err := filepath.Rel(base, path)
-		if err != nil {
-			return "", err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(h, "%s\n%d\n", filepath.ToSlash(rel), len(data))
-		h.Write(data)
-	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-`
-
-const staleGo = `package common
-
-import (
-	"fmt"
-	"os"
-)
-
-// StaleReason returns a human-readable reason this binary is out of sync with
-// its tools source, or "" if it is current. repoRoot and compiledHash are
-// injected via -ldflags; empty values mean the binary was built some other way
-// (go install, manual go build). It never exits — callers decide whether
-// staleness is fatal (pipeline tools that would otherwise produce misleading
-// results) or merely a warning (the git hook, which must never block a commit).
-func StaleReason(repoRoot, compiledHash string) string {
-	if repoRoot == "" || compiledHash == "" {
-		return "this binary was not built via ./make"
-	}
-	currentHash, err := ToolsSourceHash(repoRoot)
-	if err != nil {
-		return fmt.Sprintf("binary's repo (%s) is unreachable: %v", repoRoot, err)
-	}
-	if compiledHash != currentHash {
-		return "tools source has changed since this binary was built"
-	}
-	return ""
-}
-
-// MakeCmd is the bootstrap command to print in recovery hints.
-func MakeCmd() string {
-	if IsWindows() {
-		return ".\\make.cmd"
-	}
-	return "./make"
-}
-
-// CheckStale aborts a tool whose stale logic would otherwise run: pipeline
-// tools (verify, build, test, …) would produce misleading results, and the
-// commit gate (precommit) must never validate a commit with out-of-date logic.
-// It points the caller at ./make.
+// CommandNames returns every command this project builds into bin/, sorted.
 //
-// It is deliberately NOT a one-way door: the recovery, ./make, runs via 'go
-// run' and has no staleness gate of its own, so it always works no matter how
-// stale — or how broken — the compiled binaries are. Editing the tool source to
-// fix a broken build is likewise permitted by the guard. So the way out is
-// always fix-and-rebuild, never committing the broken state. Stale tools are a
-// speed bump (re-run ./make), never a lockout.
-func CheckStale(repoRoot, compiledHash string) {
-	reason := StaleReason(repoRoot, compiledHash)
-	if reason == "" {
-		return
+// The meta-builder compiles one command per directory under tools/build/cmd, so
+// those directories already are the registry. make is not among them: it runs
+// from source via the ./make trampoline and is never compiled into bin/, so a
+// caller asking what this project puts in bin/ must not be told about a binary
+// that is never there.
+func CommandNames(repoRoot string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(repoRoot, "tools", "build", "cmd"))
+	if err != nil {
+		return nil, err
 	}
-	fmt.Fprintf(os.Stderr, "%s — run %s", reason, MakeCmd())
-	if repoRoot != "" {
-		fmt.Fprintf(os.Stderr, " (in %s)", repoRoot)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() && e.Name() != "make" {
+			names = append(names, e.Name())
+		}
 	}
-	fmt.Fprintln(os.Stderr)
-	os.Exit(1)
+	sort.Strings(names)
+	return names, nil
 }
 `
 
-const setupGo = `package common
+// verifyGo is the project's own verify pipeline — what fails the membership
+// test in docs/primitives.md, What belongs here, because only the project knows
+// how it builds and tests itself. What RUNS the steps is the library's.
+//
+// It is authored with § standing in for the backtick, as buildDocRaw is; the Go
+// raw string literal holding it cannot contain one. Nothing inside it may use §
+// for anything else — a section sign would be written out as a backtick.
+var verifyGo = substituteBackticks(verifyGoRaw)
 
-// RunSetup wires git to use the in-repo .githooks directory. Idempotent and
-// fast, so the meta-builder calls it on every run; a fresh clone gets its
-// pre-commit hook on the first ./make.
-func RunSetup(repoRoot string) error {
-	return RunIn(repoRoot, "git", "config", "core.hooksPath", ".githooks")
-}
-`
-
-const verifyGo = `package common
+const verifyGoRaw = `package common
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/promise-language/forge/primitives"
+)
+
+// The three things a step can have been, as the summary and the JSON both name
+// them.
+const (
+	statusPassed = "passed"
+	statusFailed = "failed"
+	statusNotRun = "not-run"
 )
 
 type step struct {
 	name string
-	run  func(repoRoot string) error
+	run  func(repoRoot string, narrate io.Writer) error
 }
 
-// RunVerify is the commit gate: format → vet → build → test → record. It always
-// prints a summary block (even on failure) so an agent tailing the output sees
-// the result without re-running, and the process exit code is the only contract.
+// VerifyResult is what verify answers. It is a result like any other: the
+// command library writes it, in the mode the invocation selected, and reads the
+// status off it. Nothing here reaches stdout, because stdout carries the result
+// and nothing else.
+type VerifyResult struct {
+	OK     bool          §json:"ok"§
+	Stages []VerifyStage §json:"stages"§
+	// Tree is the id of the tree this run blessed, absent when nothing was
+	// recorded.
+	Tree string §json:"tree,omitempty"§
+}
+
+// VerifyStage is one stage of the run. This pipeline stops at the first
+// failure, so each step is a stage of its own.
+type VerifyStage struct {
+	Name  string       §json:"name"§
+	Steps []VerifyStep §json:"steps"§
+}
+
+// VerifyStep is one step, what became of it, and how long it took.
+type VerifyStep struct {
+	Name           string  §json:"name"§
+	Status         string  §json:"status"§
+	ElapsedSeconds float64 §json:"elapsed_seconds"§
+	Detail         string  §json:"detail,omitempty"§
+}
+
+// ExitStatus is 0 when every stage passed and 1 when one did not. The result is
+// written either way: the caller asked whether this tree may be committed, and
+// a no is an answer.
+func (r VerifyResult) ExitStatus() int {
+	if r.OK {
+		return 0
+	}
+	return 1
+}
+
+// Human is the summary, and it always prints — pass or fail — so that whoever
+// is tailing the output sees the result without re-running.
+func (r VerifyResult) Human(w io.Writer) error {
+	var b strings.Builder
+	b.WriteString("\n──────── verify summary ────────\n")
+	var elapsed time.Duration
+	for _, stage := range r.Stages {
+		for _, s := range stage.Steps {
+			elapsed += time.Duration(s.ElapsedSeconds * float64(time.Second))
+			fmt.Fprintf(&b, "  %-7s  %s\n", label(s.Status), s.Name)
+			if s.Detail != "" {
+				fmt.Fprintf(&b, "           %s\n", s.Detail)
+			}
+		}
+	}
+	fmt.Fprintf(&b, "  elapsed %s\n", elapsed.Round(time.Millisecond))
+	b.WriteString("────────────────────────────────\n")
+	if r.OK {
+		b.WriteString("✅ OK to Commit\n")
+	} else {
+		b.WriteString("❌ Verify FAILED: not safe to commit\n")
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// label is how a status reads in the summary.
+func label(status string) string {
+	switch status {
+	case statusPassed:
+		return "ok"
+	case statusFailed:
+		return "FAIL"
+	}
+	return statusNotRun
+}
+
+// RunVerify is the commit gate: format → vet → build → test → record.
 //
 // The trailing record step is the writing end of the verified-tree contract
-// (verifiedtree.go): the exit status says the tree is sound, and the record says
+// (verifiedtree.go): the status says the tree is sound, and the record says
 // which tree that was, so the commit gate can refuse a commit of any other one.
+//
+// It writes nothing to stdout. Progress goes to narrate, and what the run
+// became is the result it returns.
 //
 // This is an EXAMPLE pipeline. For a Go project it runs real go tooling; for
 // anything else it runs harmless stubs. Replace verifySteps with your project's
 // real commands.
-func RunVerify(repoRoot string, args []string) error {
+func RunVerify(repoRoot string, narrate io.Writer) (VerifyResult, error) {
 	// A stale blessing left behind is the one outcome the verified-tree check
 	// must never produce, so failing to clear fails the run outright.
 	if err := clearVerifiedTree(repoRoot); err != nil {
-		return fmt.Errorf("clearing %s: %w", verifiedTreeRecord, err)
+		return VerifyResult{}, fmt.Errorf("clearing %s: %w", primitives.VerifiedTreeRecord, err)
 	}
-	// The record step is appended here rather than inside verifySteps so it is
-	// last on the Go and stub pipelines alike, and being a step gets the
-	// break-on-first-failure for free — a red step blesses nothing.
-	steps := append(verifySteps(repoRoot), step{"record", recordVerifiedTree})
-	start := time.Now()
+	var tree string
+	result := runVerifySteps(repoRoot, verifyPipeline(repoRoot, &tree), narrate)
+	result.Tree = tree
+	return result, nil
+}
 
-	type result struct {
-		name string
-		ok   bool
-	}
-	var results []result
-	failed := false
-
-	for _, s := range steps {
-		fmt.Printf("==> %s\n", s.name)
-		err := s.run(repoRoot)
-		results = append(results, result{s.name, err == nil})
+// runVerifySteps runs the steps in order, stopping at the first failure. Every
+// step is reported, the ones after a failure as not run.
+func runVerifySteps(repoRoot string, steps []step, narrate io.Writer) VerifyResult {
+	result := VerifyResult{OK: true}
+	for i, s := range steps {
+		if !result.OK {
+			result.Stages = append(result.Stages, VerifyStage{
+				Name:  s.name,
+				Steps: []VerifyStep{{Name: s.name, Status: statusNotRun}},
+			})
+			continue
+		}
+		fmt.Fprintf(narrate, "==> %s\n", s.name)
+		start := time.Now()
+		err := steps[i].run(repoRoot, narrate)
+		reported := VerifyStep{
+			Name:           s.name,
+			Status:         statusPassed,
+			ElapsedSeconds: time.Since(start).Seconds(),
+		}
 		if err != nil {
-			failed = true
-			fmt.Fprintf(os.Stderr, "    %s failed: %v\n", s.name, err)
-			break // stop at the first failure
+			result.OK = false
+			reported.Status = statusFailed
+			reported.Detail = err.Error()
+			fmt.Fprintf(narrate, "    %s failed: %v\n", s.name, err)
 		}
+		result.Stages = append(result.Stages, VerifyStage{Name: s.name, Steps: []VerifyStep{reported}})
 	}
+	return result
+}
 
-	fmt.Println("\n──────── verify summary ────────")
-	for _, r := range results {
-		status := "ok"
-		if !r.ok {
-			status = "FAIL"
-		}
-		fmt.Printf("  %-4s  %s\n", status, r.name)
-	}
-	fmt.Printf("  elapsed %s\n", time.Since(start).Round(time.Millisecond))
-	fmt.Println("────────────────────────────────")
-
-	if failed {
-		fmt.Println("❌ Verify FAILED: not safe to commit")
-		return fmt.Errorf("verify failed")
-	}
-	fmt.Println("✅ OK to Commit")
-	return nil
+// verifyPipeline is the full run: the project's steps, then the unconditional
+// trailing record step. Appended here rather than inside verifySteps so it is
+// last on the Go and stub pipelines alike, and being a step gets the
+// break-on-first-failure for free — a red step leaves nothing blessed.
+func verifyPipeline(repoRoot string, tree *string) []step {
+	record := step{"record", func(root string, narrate io.Writer) error {
+		recorded, err := recordVerifiedTree(root, narrate)
+		*tree = recorded
+		return err
+	}}
+	return append(verifySteps(repoRoot), record)
 }
 
 func verifySteps(repoRoot string) []step {
-	if Exists(filepath.Join(repoRoot, "go.mod")) {
+	if primitives.Exists(filepath.Join(repoRoot, "go.mod")) {
 		return []step{
-			{"format", func(r string) error { return RunIn(r, "gofmt", "-w", ".") }},
-			{"vet", func(r string) error { return RunIn(r, "go", "vet", "./...") }},
-			{"build", func(r string) error { return RunIn(r, "go", "build", "./...") }},
-			{"test", func(r string) error { return RunIn(r, "go", "test", "./...") }},
+			{"format", func(r string, n io.Writer) error { return primitives.RunInStreams(r, n, n, "gofmt", "-w", ".") }},
+			{"vet", func(r string, n io.Writer) error { return primitives.RunInStreams(r, n, n, "go", "vet", "./...") }},
+			{"build", func(r string, n io.Writer) error { return primitives.RunInStreams(r, n, n, "go", "build", "./...") }},
+			{"test", func(r string, n io.Writer) error { return primitives.RunInStreams(r, n, n, "go", "test", "./...") }},
 		}
 	}
 	stub := func(label string) step {
-		return step{label, func(r string) error {
-			fmt.Printf("    (stub) wire up your %s command in tools/build/common/verify.go\n", label)
+		return step{label, func(r string, n io.Writer) error {
+			fmt.Fprintf(n, "    (stub) wire up your %s command in tools/build/common/verify.go\n", label)
 			return nil
 		}}
 	}
@@ -823,34 +726,43 @@ var verifiedTreeGo = substituteBackticks(verifiedTreeGoRaw)
 const verifiedTreeGoRaw = `package common
 
 // This file is the writing end of the verified-tree contract: bin/verify
-// records the tree it blessed at .workspace/verified-tree, and the commit gate
-// refuses a commit whose staged tree differs.
+// records the tree it blessed at primitives.VerifiedTreeRecord, and the
+// workspace-delivered bin/precommit-guard refuses a commit whose staged tree
+// differs.
 //
 // The reading end is not in this repository. bin/precommit-guard is a workspace
 // tool, built and owned there, and this module cannot import it. What the two
 // ends share is the record's location and format, not code: one git tree object
-// id, newline terminated, at the path below. Spelling it wrong here is a
-// permanent, silent refusal — verify writes one path, the guard reads another
-// and always finds it absent — so it is a constant, named once.
+// id, newline terminated, at that path. The path is imported rather than typed
+// here, because a path typed at each end agrees only by coincidence and
+// spelling it wrong is a permanent, silent refusal — verify writes one path,
+// the guard reads another and always finds it absent.
 
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/promise-language/forge/primitives"
 )
 
-// verifiedTreeRecord is where verify records the tree it blessed, in the
-// gitignored per-checkout .workspace/ directory.
-const verifiedTreeRecord = ".workspace/verified-tree"
+// recordPath is where the record lives in the checkout at repoRoot. Everything
+// this file touches is derived from it — including the directory it is created
+// in — so the temp file and the name it is renamed to cannot end up in
+// different places, which is what would make the rename non-atomic.
+func recordPath(repoRoot string) string {
+	return filepath.Join(repoRoot, filepath.FromSlash(primitives.VerifiedTreeRecord))
+}
 
 // clearVerifiedTree removes the record. Verify calls it before its first step
 // so a run that dies mid-way leaves nothing blessed and an in-flight verify
 // blesses nothing. An absent record is not an error.
 func clearVerifiedTree(repoRoot string) error {
-	err := os.Remove(filepath.Join(repoRoot, filepath.FromSlash(verifiedTreeRecord)))
+	err := os.Remove(recordPath(repoRoot))
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -873,15 +785,15 @@ func clearVerifiedTree(repoRoot string) error {
 // Outside a git checkout, recording is a reported no-op rather than a verify
 // failure: there is no commit to gate there, and a commit gate still refuses on
 // the absent record.
-func recordVerifiedTree(repoRoot string) error {
+func recordVerifiedTree(repoRoot string, narrate io.Writer) (string, error) {
 	if _, err := gitWithIndex(repoRoot, "", "rev-parse", "--git-dir"); err != nil {
-		fmt.Println("    not a git checkout — no verified-tree record to write")
-		return nil
+		fmt.Fprintln(narrate, "    not a git checkout — no verified-tree record to write")
+		return "", nil
 	}
 
 	tmpDir, err := os.MkdirTemp("", "verified-tree-")
 	if err != nil {
-		return fmt.Errorf("creating temp index dir: %w", err)
+		return "", fmt.Errorf("creating temp index dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 	index := filepath.Join(tmpDir, "index")
@@ -890,54 +802,57 @@ func recordVerifiedTree(repoRoot string) error {
 	// index file yet, and an empty seed is exactly its tracked set.
 	realIndex, err := gitWithIndex(repoRoot, "", "rev-parse", "--git-path", "index")
 	if err != nil {
-		return fmt.Errorf("locating the index: %w", err)
+		return "", fmt.Errorf("locating the index: %w", err)
 	}
 	if !filepath.IsAbs(realIndex) {
 		realIndex = filepath.Join(repoRoot, realIndex)
 	}
 	if data, err := os.ReadFile(realIndex); err == nil {
 		if err := os.WriteFile(index, data, 0o600); err != nil {
-			return fmt.Errorf("seeding temp index: %w", err)
+			return "", fmt.Errorf("seeding temp index: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("seeding temp index: %w", err)
+		return "", fmt.Errorf("seeding temp index: %w", err)
 	}
 	if _, err := gitWithIndex(repoRoot, index, "add", "-A"); err != nil {
-		return fmt.Errorf("staging into temp index: %w", err)
+		return "", fmt.Errorf("staging into temp index: %w", err)
 	}
 	tree, err := gitWithIndex(repoRoot, index, "write-tree")
 	if err != nil {
-		return fmt.Errorf("computing verified tree: %w", err)
+		return "", fmt.Errorf("computing verified tree: %w", err)
 	}
 
-	dir := filepath.Join(repoRoot, ".workspace")
+	record := recordPath(repoRoot)
+	dir := filepath.Dir(record)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", dir, err)
+		return "", fmt.Errorf("creating %s: %w", dir, err)
 	}
 	// Atomic: temp file + rename, so no reader ever sees a half-written record.
+	// The temp file is made in the record's own directory, since a rename is
+	// only atomic within one filesystem.
 	tmp, err := os.CreateTemp(dir, ".verified-tree-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tmp.WriteString(tree + "\n"); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
-		return err
+		return "", err
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
-		return err
+		return "", err
 	}
-	if err := os.Rename(tmp.Name(), filepath.Join(repoRoot, filepath.FromSlash(verifiedTreeRecord))); err != nil {
+	if err := os.Rename(tmp.Name(), record); err != nil {
 		os.Remove(tmp.Name())
-		return err
+		return "", err
 	}
-	return nil
+	return tree, nil
 }
 
 // gitWithIndex runs git in dir, with GIT_INDEX_FILE pointed at indexFile when
-// one is given, and returns trimmed stdout. RunOutputIn cannot be used: it
-// carries no environment, which is the one thing this needs. Stderr is
+// one is given, and returns trimmed stdout. primitives.RunOutputIn cannot be
+// used: it carries no environment, which is the one thing this needs. Stderr is
 // captured into the error so it never leaks to the terminal.
 func gitWithIndex(dir, indexFile string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
@@ -988,12 +903,15 @@ const gateGoRaw = `package common
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/promise-language/forge/primitives"
 )
 
 // MetricType is what kind of number a measurement is. The set is closed.
@@ -1239,35 +1157,17 @@ func MeasureGate(repoRoot, name string) (Envelope, error) {
 	return env, nil
 }
 
-// ParseGateArgs reads a gate invocation: exactly one name, and whether the
-// caller asked for an envelope.
-//
-// The rules it enforces are the protocol, not this program's preferences. A
-// gate is asked for one way, because two callers asking the same thing must not
-// be able to get different answers and both be right — so an unknown flag is
-// refused rather than ignored, and a second name is refused rather than
-// silently dropped.
-func ParseGateArgs(args []string) (name string, envelope bool, err error) {
-	for _, a := range NormalizeArgs(args) {
-		switch {
-		case a == "-envelope":
-			envelope = true
-		case strings.HasPrefix(a, "-"):
-			return "", false, fmt.Errorf("use of unknown flag %q; known gates: %s", a, strings.Join(GateNames(), ", "))
-		case name != "":
-			return "", false, fmt.Errorf("unexpected argument %q; a gate is asked for by name, once; known gates: %s",
-				a, strings.Join(GateNames(), ", "))
-		default:
-			name = a
-		}
-	}
-	if name == "" {
-		return "", false, fmt.Errorf("no gate named; known gates: %s", strings.Join(GateNames(), ", "))
-	}
-	if !KnownGate(name) {
-		return "", false, unknownGate(name)
-	}
-	return name, envelope, nil
+// Measured is one gate's envelope as the result the command library writes.
+// This type exists only to carry the envelope out of the action without the
+// action reaching stdout itself.
+type Measured Envelope
+
+// Human is not reached: --envelope's stdout belongs to the gate contract, so
+// the command has one mode and the library never asks for a rendering. Saying
+// so loudly is what keeps a future caller from inventing a second shape for a
+// wire another document owns.
+func (m Measured) Human(io.Writer) error {
+	return fmt.Errorf("an envelope's shape is the gate contract's, and it has no rendering for a person")
 }
 
 // unknownGate is the refusal every entry point gives for a name this project
@@ -1287,11 +1187,11 @@ func unknownGate(name string) error {
 // not know it is incomplete.
 func modules(repoRoot string) []string {
 	var dirs []string
-	if Exists(filepath.Join(repoRoot, "go.mod")) {
+	if primitives.Exists(filepath.Join(repoRoot, "go.mod")) {
 		dirs = append(dirs, repoRoot)
 	}
 	tools := filepath.Join(repoRoot, "tools", "build")
-	if Exists(filepath.Join(tools, "go.mod")) {
+	if primitives.Exists(filepath.Join(tools, "go.mod")) {
 		dirs = append(dirs, tools)
 	}
 	return dirs
@@ -1383,7 +1283,7 @@ func prereqCommands() []string { return []string{"go", "gofmt", "git"} }
 func measureFit(_ string, _ []string) ([]Metric, string, error) {
 	missing := 0
 	for _, cmd := range prereqCommands() {
-		if Which(cmd) == "" {
+		if primitives.Which(cmd) == "" {
 			fmt.Fprintf(os.Stderr, "==> missing prerequisite: %s\n", cmd)
 			missing++
 		}
@@ -1552,6 +1452,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/promise-language/forge/primitives"
 )
 
 // Direction is the sense in which a measurement is compared to its threshold.
@@ -1606,18 +1508,18 @@ func loadManifest(repoRoot string) (map[string]Threshold, error) {
 // external runner takes, so a gate that is broken in a way only visible across
 // that boundary (prints to stdout, exits without an envelope, hangs) is broken
 // here too, where a person can see it.
-func RunOneGate(repoRoot, gateBin, name string) error {
+func RunOneGate(repoRoot, gateBin, name string, narrate io.Writer) (Judged, error) {
 	if !KnownGate(name) {
-		return unknownGate(name)
+		return Judged{}, unknownGate(name)
 	}
 
 	cmd := exec.Command(gateBin, name, "--envelope")
 	cmd.Dir = repoRoot
-	// Stderr is the gate's progress, and it goes straight to ours — not into a
-	// buffer we print afterwards. Gates run for minutes, and a gate that is
-	// working and a gate that is wedged produce the same thing (nothing) for as
-	// long as the output is held.
-	cmd.Stderr = os.Stderr
+	// The gate's progress goes straight to the narration — not into a buffer
+	// printed afterwards. Gates run for minutes, and a gate that is working and
+	// a gate that is wedged produce the same thing (nothing) for as long as the
+	// output is held.
+	cmd.Stderr = narrate
 	out, runErr := cmd.Output()
 
 	var env Envelope
@@ -1626,22 +1528,57 @@ func RunOneGate(repoRoot, gateBin, name string) error {
 		// that is not an envelope, nothing was measured — and either way this
 		// is not a report that the tree is bad.
 		if runErr != nil {
-			return fmt.Errorf("%s did not measure anything: %w", name, runErr)
+			return Judged{}, fmt.Errorf("%s did not measure anything: %w", name, runErr)
 		}
-		return fmt.Errorf("%s printed something that is not an envelope: %s",
+		return Judged{}, fmt.Errorf("%s printed something that is not an envelope: %s",
 			name, firstLine(string(out)))
 	}
 
 	manifest, err := loadManifest(repoRoot)
 	if err != nil {
+		return Judged{}, err
+	}
+	acceptable, thresholds, detail := judge(env, manifest)
+	return Judged{
+		Envelope: env,
+		Verdict:  Verdict{Acceptable: acceptable, Thresholds: thresholds, Detail: detail},
+		rendered: renderVerdict(env, manifest),
+	}, nil
+}
+
+// Judged is a measurement and the verdict reached on it: what §run <gate>§
+// answers. The verdict travels with the terms it was reached from, so a reader
+// who was not there can re-check it.
+type Judged struct {
+	Envelope Envelope §json:"envelope"§
+	Verdict  Verdict  §json:"verdict"§
+
+	// rendered is the human form: each measurement beside every term it was
+	// judged on, which is what someone iterating on one failure is reading.
+	rendered string
+}
+
+// Human writes each measurement beside the term it was judged on.
+func (j Judged) Human(w io.Writer) error {
+	if _, err := io.WriteString(w, j.rendered); err != nil {
 		return err
 	}
-	fmt.Print(renderVerdict(env, manifest))
-	acceptable, _, detail := judge(env, manifest)
-	if !acceptable {
-		return fmt.Errorf("%s: %s", name, detail)
+	if j.Verdict.Acceptable || j.Verdict.Detail == "" {
+		return nil
 	}
-	return nil
+	_, err := fmt.Fprintf(w, "%s\n", j.Verdict.Detail)
+	return err
+}
+
+// ExitStatus is 0 when every capped measurement is within its cap and 1 when
+// one is not. The verdict is the JSON, not the status — but a person running
+// one gate reads the status, and a measurement over its cap is a condition they
+// must clear.
+func (j Judged) ExitStatus() int {
+	if j.Verdict.Acceptable {
+		return 0
+	}
+	return 1
 }
 
 // judge compares one envelope against the caps and reaches the verdict.
@@ -1692,8 +1629,8 @@ func judge(env Envelope, manifest map[string]Threshold) (acceptable bool, thresh
 	}
 }
 
-// JudgeStdin judges an envelope this program did NOT produce, and writes one
-// verdict object to out.
+// JudgeStdin judges an envelope this program did NOT produce, and answers one
+// verdict.
 //
 // Reading the measurement rather than making it is the whole point of this
 // mode. Whoever spawned the gate is the runner; if this entry point ran the
@@ -1703,80 +1640,50 @@ func judge(env Envelope, manifest map[string]Threshold) (acceptable bool, thresh
 // Nothing reaches out on any error path. A caller reads one object or none — a
 // half-written verdict beside an error message is a second channel, and the two
 // could disagree.
-func JudgeStdin(repoRoot, name string, in io.Reader, out io.Writer) error {
+func JudgeStdin(repoRoot, name string, in io.Reader) (Verdict, error) {
 	if !KnownGate(name) {
-		return unknownGate(name)
+		return Verdict{}, unknownGate(name)
 	}
 	envelope, err := io.ReadAll(in)
 	if err != nil {
-		return fmt.Errorf("reading the envelope to judge: %w", err)
+		return Verdict{}, fmt.Errorf("reading the envelope to judge: %w", err)
 	}
 	var env Envelope
 	if err := json.Unmarshal(envelope, &env); err != nil {
-		return fmt.Errorf("what arrived on stdin is not an envelope: %w", err)
+		return Verdict{}, fmt.Errorf("what arrived on stdin is not an envelope: %w", err)
 	}
 	// The judge's check, and not the caller's: only this layer knows which gate
 	// the terms it is about to apply belong to. Judging one gate's numbers
 	// against another's caps would answer a question nobody asked.
 	if env.Gate != name {
-		return fmt.Errorf("asked to judge %q against the terms for %q; a measurement is judged against its own gate's caps", env.Gate, name)
+		return Verdict{}, fmt.Errorf("asked to judge %q against the terms for %q; a measurement is judged against its own gate's caps", env.Gate, name)
 	}
 	manifest, err := loadManifest(repoRoot)
 	if err != nil {
-		return err
+		return Verdict{}, err
 	}
 	acceptable, thresholds, detail := judge(env, manifest)
-	// Marshalled whole before anything is written, so a failure here leaves
-	// stdout untouched rather than half a verdict.
-	body, err := json.Marshal(verdictWire{Acceptable: acceptable, Thresholds: thresholds, Detail: detail})
-	if err != nil {
-		return fmt.Errorf("rendering the verdict for %s: %w", name, err)
-	}
-	_, err = out.Write(append(body, '\n'))
-	return err
+	return Verdict{Acceptable: acceptable, Thresholds: thresholds, Detail: detail}, nil
 }
 
-// verdictWire is what the judging layer prints in --verdict mode: one JSON
-// object, whole.
+// Verdict is what the judging layer answers in --verdict mode: one JSON object,
+// whole. The library writes it — marshalled before anything reaches stdout, so
+// a failure there leaves the stream untouched rather than half a verdict.
 //
 // Thresholds is not omitempty and is never nil. A verdict handed over with the
 // terms it was reached from discarded cannot be re-checked by anyone who was not
 // there, which is exactly the property that lets a judge live in the tree it
 // judges.
-type verdictWire struct {
+type Verdict struct {
 	Acceptable bool               §json:"acceptable"§
 	Thresholds map[string]float64 §json:"thresholds"§
 	Detail     string             §json:"detail,omitempty"§
 }
 
-// ParseRunArgs reads an invocation of this program: exactly one gate name, and
-// whether the caller asked for a verdict on an envelope it is handing over.
-//
-// Same rules as ParseGateArgs, and for the same reason — an unknown flag is
-// refused rather than ignored, and a second name refused rather than dropped. A
-// caller that meant --verdict and mistyped it must not silently get the
-// measuring mode, which spawns a gate.
-func ParseRunArgs(args []string) (name string, verdict bool, err error) {
-	for _, a := range NormalizeArgs(args) {
-		switch {
-		case a == "-verdict":
-			verdict = true
-		case strings.HasPrefix(a, "-"):
-			return "", false, fmt.Errorf("use of unknown flag %q; known gates: %s", a, strings.Join(GateNames(), ", "))
-		case name != "":
-			return "", false, fmt.Errorf("unexpected argument %q; one gate at a time; known gates: %s",
-				a, strings.Join(GateNames(), ", "))
-		default:
-			name = a
-		}
-	}
-	if name == "" {
-		return "", false, fmt.Errorf("no gate named; known gates: %s", strings.Join(GateNames(), ", "))
-	}
-	if !KnownGate(name) {
-		return "", false, unknownGate(name)
-	}
-	return name, verdict, nil
+// Human is not reached: --verdict's stdout belongs to the gate contract, so the
+// command has one mode and the library never asks for a rendering.
+func (v Verdict) Human(io.Writer) error {
+	return fmt.Errorf("a verdict's shape is the gate contract's, and it has no rendering for a person")
 }
 
 // renderVerdict prints each measurement beside the term it was judged on.
@@ -1835,7 +1742,7 @@ func unitSuffix(unit string) string {
 // GateBinary is where this project's gate program lives, relative to the repo
 // root. Not configurable: the names are fixed, so the way to reach them is.
 func GateBinary(repoRoot string) string {
-	return filepath.Join(repoRoot, "bin", BinaryName("gate"))
+	return filepath.Join(repoRoot, "bin", primitives.BinaryName("gate"))
 }
 
 // CappedMetrics lists the metrics this layer judges, for usage text. If the
@@ -1868,6 +1775,7 @@ const gateTestGoRaw = `package common
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1890,46 +1798,6 @@ func manifestRepo(t *testing.T, body string) string {
 }
 
 const capMissingPrereqs = §{"missing_prereqs": {"direction": "at_most", "cap": 0}}§
-
-// Every refusal names what this project does answer. A caller that mistyped a
-// gate name learns the set rather than only that it was wrong.
-func TestParseGateArgsRefusesWhatIsNotOneGate(t *testing.T) {
-	cases := []struct {
-		name string
-		args []string
-	}{
-		{"no gate at all", nil},
-		{"an unknown name", []string{"coverage"}},
-		{"a second name", []string{"fit", "tested"}},
-		{"an unknown flag", []string{"fit", "--json"}},
-	}
-	for _, c := range cases {
-		_, _, err := ParseGateArgs(c.args)
-		if err == nil {
-			t.Errorf("%s: expected a refusal, got none", c.name)
-			continue
-		}
-		if !strings.Contains(err.Error(), "integration") {
-			t.Errorf("%s: the refusal does not name the known gates: %v", c.name, err)
-		}
-	}
-}
-
-// A bare name parses, and reports that no envelope was asked for. The refusal
-// itself lives in cmd/gate, because printing measurements without --envelope
-// would be read as a pass by the first script that wrapped it.
-func TestParseGateArgsReportsWhetherAnEnvelopeWasAskedFor(t *testing.T) {
-	name, envelope, err := ParseGateArgs([]string{"fit"})
-	if err != nil {
-		t.Fatalf("a known gate was refused: %v", err)
-	}
-	if name != "fit" || envelope {
-		t.Errorf("ParseGateArgs = (%q, %v), want (\"fit\", false)", name, envelope)
-	}
-	if _, envelope, err = ParseGateArgs([]string{"fit", "--envelope"}); err != nil || !envelope {
-		t.Errorf("--envelope was not read: envelope=%v err=%v", envelope, err)
-	}
-}
 
 func TestMeasureGateRefusesAnUnknownName(t *testing.T) {
 	env, err := MeasureGate(t.TempDir(), "coverage")
@@ -2030,22 +1898,15 @@ func TestJudgeRefusesAnIncompleteRunWithEveryNumberInCap(t *testing.T) {
 	}
 }
 
-func TestJudgeStdinWritesOneVerdictCarryingItsTerms(t *testing.T) {
+func TestJudgeStdinAnswersOneVerdictCarryingItsTerms(t *testing.T) {
 	root := manifestRepo(t, capMissingPrereqs)
 	env, err := json.Marshal(Envelope{Gate: "fit", Metrics: []Metric{Count("missing_prereqs", 0)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
-	if err := JudgeStdin(root, "fit", bytes.NewReader(env), &out); err != nil {
+	verdict, err := JudgeStdin(root, "fit", bytes.NewReader(env))
+	if err != nil {
 		t.Fatalf("judging a well-formed envelope failed: %v", err)
-	}
-	var verdict struct {
-		Acceptable bool               §json:"acceptable"§
-		Thresholds map[string]float64 §json:"thresholds"§
-	}
-	if err := json.Unmarshal(out.Bytes(), &verdict); err != nil {
-		t.Fatalf("the verdict does not parse: %v (%q)", err, out.String())
 	}
 	if !verdict.Acceptable {
 		t.Error("0 missing prerequisites was not acceptable")
@@ -2055,9 +1916,10 @@ func TestJudgeStdinWritesOneVerdictCarryingItsTerms(t *testing.T) {
 	}
 }
 
-// Nothing reaches stdout on any error path: a caller reads one object or none,
-// because a half-written verdict beside an error message is a second channel.
-func TestJudgeStdinWritesNothingWhenItRefuses(t *testing.T) {
+// Nothing is answered on any error path: the caller gets a verdict or an error,
+// never both, because a half-formed verdict beside an error message is a second
+// channel and the two could disagree.
+func TestJudgeStdinAnswersNothingWhenItRefuses(t *testing.T) {
 	root := manifestRepo(t, capMissingPrereqs)
 	other, err := json.Marshal(Envelope{Gate: "tested", Metrics: []Metric{Count("failed_tests", 0)}})
 	if err != nil {
@@ -2073,13 +1935,25 @@ func TestJudgeStdinWritesNothingWhenItRefuses(t *testing.T) {
 		{"the gate is unknown", "coverage", other},
 	}
 	for _, c := range cases {
-		var out bytes.Buffer
-		if err := JudgeStdin(root, c.gate, bytes.NewReader(c.stdin), &out); err == nil {
+		verdict, err := JudgeStdin(root, c.gate, bytes.NewReader(c.stdin))
+		if err == nil {
 			t.Errorf("%s: expected a refusal, got none", c.name)
 		}
-		if out.Len() != 0 {
-			t.Errorf("%s: wrote %q to stdout while refusing", c.name, out.String())
+		if verdict.Acceptable || verdict.Thresholds != nil {
+			t.Errorf("%s: a refusal carried a verdict: %+v", c.name, verdict)
 		}
+	}
+}
+
+// A verdict's shape belongs to the gate contract, so the command has one mode
+// and the library never renders it. A rendering that quietly existed would be a
+// second shape for a wire another document owns.
+func TestAVerdictAndAnEnvelopeHaveNoHumanForm(t *testing.T) {
+	if err := (Verdict{}).Human(io.Discard); err == nil {
+		t.Error("a verdict rendered itself for a person")
+	}
+	if err := (Measured{}).Human(io.Discard); err == nil {
+		t.Error("an envelope rendered itself for a person")
 	}
 }
 
@@ -2131,92 +2005,148 @@ func TestMetricRefusesAValueThatIsNotItsDeclaredType(t *testing.T) {
 `
 
 // ───────────────────────── cmd mains ─────────────────────────
+//
+// Each main is a definition and one call into the command library. What it
+// parses, how it renders, which mode it writes in and what it exits with are
+// not a main's to decide (docs/command-line.md, One implementation) — and a
+// main that read os.Args for itself would be the hand-rolled parser the library
+// exists to remove.
+//
+// Staleness reaches every tool but the meta-builder as command.Tool.Fit: a
+// refusal the library writes as a refusal object with the recovery named, where
+// a check calling os.Exit could only leave prose on stderr.
 
-const cmdMakeGo = `// Command make is the meta-builder. It compiles every other tool under cmd/
+var cmdMakeGo = substituteBackticks(cmdMakeGoRaw)
+
+const cmdMakeGoRaw = `// Command make is the meta-builder. It compiles every other tool under cmd/
 // into <repoRoot>/bin, stamping each binary with the tools-source hash and the
 // absolute repo root via -ldflags. It is the one tool that runs via 'go run'
 // (from the ./make trampoline), so it is never compiled into bin/ and never
 // stale — which is what breaks the bootstrap cycle.
+//
+// It is also the recovery every refusal names, which is why it declares no Fit:
+// a tool that refused because the binaries are stale points at this one, and a
+// builder that could refuse on the same ground would close the way out.
 package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
+
+	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 
 	"__MODULE__/common"
 )
 
-func main() {
-	force := false
-	for _, a := range os.Args[1:] {
-		if a == "-force" || a == "--force" {
-			force = true
+// result is what make answers: whether it had anything to do, and what it did.
+type result struct {
+	UpToDate bool     §json:"up_to_date"§
+	Built    []string §json:"built"§
+}
+
+// Human is the line, or the lines, a person reads.
+func (r result) Human(w io.Writer) error {
+	if r.UpToDate {
+		_, err := fmt.Fprintln(w, "Tools up to date")
+		return err
+	}
+	for _, name := range r.Built {
+		if _, err := fmt.Fprintf(w, "built    %s\n", name); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
+// define is make's whole surface. It carries no version: it is the one main
+// without a stamp, because it runs from the source it builds.
+func define() command.Tool {
+	return command.Tool{
+		Project: "make",
+		Root: command.Command{
+			Name:    "make",
+			Summary: "compile every tool under tools/build/cmd into bin/",
+			Flags: []command.Flag{{
+				Name:        "rebuild",
+				Type:        command.Boolean,
+				Description: "compile every tool even where bin/ is already up to date",
+			}},
+			Action: build,
+		},
+	}
+}
+
+// build is the meta-builder's whole run.
+func build(c *command.Call) (command.Result, error) {
 	// 1. Resolve the repo root. The ./make trampoline cd'd go run into
 	//    <root>/tools/build, so our cwd is exactly that. Two levels up is root.
 	cwd, err := os.Getwd()
-	must(err)
+	if err != nil {
+		return nil, err
+	}
 	repoRoot := filepath.Dir(filepath.Dir(cwd))
 	if !filepath.IsAbs(repoRoot) {
-		fail("resolved repo root is not absolute: %s", repoRoot)
+		return nil, fmt.Errorf("resolved repo root is not absolute: %s", repoRoot)
 	}
 
-	// 2. Hash the tools source — baked into every binary below.
-	hash, err := common.ToolsSourceHash(repoRoot)
-	must(err)
+	// 2. Hash the tools source — baked into every binary below. The pinned
+	//    dependency is recorded in go.mod and go.sum, and both are hashed, so
+	//    raising the pin makes every binary report itself stale.
+	hash, err := primitives.ToolsSourceHash(repoRoot)
+	if err != nil {
+		return nil, err
+	}
 
 	// 3. Enable git hooks unconditionally (idempotent, fast).
-	if err := common.RunSetup(repoRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not configure git hooks: %v\n", err)
+	if err := primitives.RunSetup(repoRoot); err != nil {
+		fmt.Fprintf(c.Narrate, "warning: could not configure git hooks: %v\n", err)
 	}
 
-	// Discover tools: every cmd/<name> except make itself.
-	cmdDir := filepath.Join(repoRoot, "tools", "build", "cmd")
-	entries, err := os.ReadDir(cmdDir)
-	must(err)
-	var tools []string
-	for _, e := range entries {
-		if e.IsDir() && e.Name() != "make" {
-			tools = append(tools, e.Name())
-		}
+	// What this project builds, from the one function that answers that — the
+	// same one §run --list§ reports from, so the binaries this writes into bin/
+	// and the commands the project claims cannot drift apart.
+	tools, err := common.CommandNames(repoRoot)
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(tools)
 
 	binDir := filepath.Join(repoRoot, "bin")
 	hashFile := filepath.Join(binDir, ".tools.hash")
 
 	// 4. Up-to-date short circuit.
-	if !force && upToDate(hashFile, hash, binDir, tools) {
-		fmt.Println("Tools up to date")
-		return
+	if !c.Bool("rebuild") && upToDate(hashFile, hash, binDir, tools) {
+		return result{UpToDate: true, Built: []string{}}, nil
 	}
 
-	must(os.MkdirAll(binDir, 0o755))
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return nil, err
+	}
 
 	// 5. Build each tool, injecting repoRoot and sourceHash via ldflags.
 	ldflags := fmt.Sprintf("-s -w -X main.sourceHash=%s -X main.repoRoot=%s", hash, repoRoot)
 	toolsModDir := filepath.Join(repoRoot, "tools", "build")
 	for _, name := range tools {
-		out := filepath.Join(binDir, common.BinaryName(name))
-		fmt.Printf("building %s\n", name)
-		if err := common.RunIn(toolsModDir, "go", "build",
+		out := filepath.Join(binDir, primitives.BinaryName(name))
+		fmt.Fprintf(c.Narrate, "building %s\n", name)
+		if err := primitives.RunInStreams(toolsModDir, c.Narrate, c.Narrate, "go", "build",
 			"-trimpath",
 			"-ldflags", ldflags,
 			"-o", out,
 			"./cmd/"+name,
 		); err != nil {
-			fail("building %s: %v", name, err)
+			return nil, fmt.Errorf("building %s: %w", name, err)
 		}
 	}
 
 	// 6. Write the hash sidecar — the staleness contract.
-	must(os.WriteFile(hashFile, []byte(hash+"\n"), 0o644))
-	fmt.Printf("built %d tool(s) into bin/\n", len(tools))
+	if err := os.WriteFile(hashFile, []byte(hash+"\n"), 0o644); err != nil {
+		return nil, err
+	}
+	return result{Built: tools}, nil
 }
 
 func upToDate(hashFile, hash, binDir string, tools []string) bool {
@@ -2225,30 +2155,30 @@ func upToDate(hashFile, hash, binDir string, tools []string) bool {
 		return false
 	}
 	for _, name := range tools {
-		if !common.Exists(filepath.Join(binDir, common.BinaryName(name))) {
+		if !primitives.Exists(filepath.Join(binDir, primitives.BinaryName(name))) {
 			return false
 		}
 	}
 	return true
 }
 
-func must(err error) {
-	if err != nil {
-		fail("%v", err)
-	}
-}
-
-func fail(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "make: "+format+"\n", args...)
-	os.Exit(1)
+func main() {
+	os.Exit(command.Run(define(), os.Args[1:], command.Stdio()))
 }
 `
 
-const cmdVerifyGo = `package main
+const cmdVerifyGo = `// Command verify is the commit gate: it repairs what has one right answer,
+// then measures what remains.
+//
+// It is one call into the command library and the definition below: what it
+// parses, how it reports and what it exits with are not this file's.
+package main
 
 import (
-	"fmt"
 	"os"
+
+	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 
 	"__MODULE__/common"
 )
@@ -2259,36 +2189,110 @@ var (
 	sourceHash = ""
 )
 
-func main() {
-	common.CheckStale(repoRoot, sourceHash)
-	if err := common.RunVerify(repoRoot, common.NormalizeArgs(os.Args[1:])); err != nil {
-		fmt.Fprintln(os.Stderr, "verify failed:", err)
-		os.Exit(1)
+// define is verify's whole surface.
+func define(repoRoot, sourceHash string) command.Tool {
+	return command.Tool{
+		Project: "verify",
+		Version: sourceHash,
+		Fit: func() *command.Refusal {
+			return primitives.StaleRefusal("verify", repoRoot, sourceHash)
+		},
+		Root: command.Command{
+			Name:    "verify",
+			Summary: "the commit gate: repair what has one right answer, then measure what remains",
+			Action: func(c *command.Call) (command.Result, error) {
+				result, err := common.RunVerify(repoRoot, c.Narrate)
+				if err != nil {
+					return nil, err
+				}
+				return result, nil
+			},
+		},
 	}
+}
+
+func main() {
+	os.Exit(command.Run(define(repoRoot, sourceHash), os.Args[1:], command.Stdio()))
 }
 `
 
-const cmdSetupGo = `package main
+var cmdSetupGo = substituteBackticks(cmdSetupGoRaw)
+
+const cmdSetupGoRaw = `// Command setup makes a fresh clone ready to gate its own commits.
+//
+// It is one call into the command library and the definition below: what it
+// parses, how it reports and what it exits with are not this file's.
+package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
-	"__MODULE__/common"
+	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 )
 
+// Injected by the meta-builder via -ldflags at build time; empty otherwise.
 var (
 	repoRoot   = ""
 	sourceHash = ""
 )
 
-func main() {
-	common.CheckStale(repoRoot, sourceHash)
-	if err := common.RunSetup(repoRoot); err != nil {
-		fmt.Fprintln(os.Stderr, "setup failed:", err)
-		os.Exit(1)
+// result is what setup answers: where git now looks for this repository's
+// hooks, and what each of the project's own setup steps changed.
+type result struct {
+	HooksPath string §json:"hooks_path"§
+	Steps     []step §json:"steps"§
+}
+
+// step is one of the project's own setup steps, and whether it changed
+// anything. A second run changes nothing and says so.
+type step struct {
+	Name    string §json:"name"§
+	Changed bool   §json:"changed"§
+}
+
+// Human is the line a person reads.
+func (r result) Human(w io.Writer) error {
+	if _, err := fmt.Fprintf(w, "git hooks configured (core.hooksPath = %s)\n", r.HooksPath); err != nil {
+		return err
 	}
-	fmt.Println("git hooks configured (core.hooksPath = .githooks)")
+	for _, s := range r.Steps {
+		changed := "unchanged"
+		if s.Changed {
+			changed = "changed"
+		}
+		if _, err := fmt.Fprintf(w, "  %-12s %s\n", s.Name, changed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// define is setup's whole surface.
+func define(repoRoot, sourceHash string) command.Tool {
+	return command.Tool{
+		Project: "setup",
+		Version: sourceHash,
+		Fit: func() *command.Refusal {
+			return primitives.StaleRefusal("setup", repoRoot, sourceHash)
+		},
+		Root: command.Command{
+			Name:    "setup",
+			Summary: "point git at this repository's hooks",
+			Action: func(c *command.Call) (command.Result, error) {
+				if err := primitives.RunSetup(repoRoot); err != nil {
+					return nil, fmt.Errorf("wiring the git hooks: %w", err)
+				}
+				return result{HooksPath: primitives.HooksPath, Steps: []step{}}, nil
+			},
+		},
+	}
+}
+
+func main() {
+	os.Exit(command.Run(define(repoRoot, sourceHash), os.Args[1:], command.Stdio()))
 }
 `
 
@@ -2296,17 +2300,22 @@ var cmdGateGo = substituteBackticks(cmdGateGoRaw)
 
 const cmdGateGoRaw = `// Command gate measures one property of this tree and prints what it found.
 //
-// It is not meant to be run by hand — §bin/run <gate>§ is that path. A gate
-// answers a runner, and a runner is the only caller that can say what became of
-// the run: a gate killed for memory is not alive to report it, and a gate that
+// It is not meant to be run by hand — §run <gate>§ is that path. A gate answers
+// a runner, and a runner is the only caller that can say what became of the
+// run: a gate killed for memory is not alive to report it, and a gate that
 // exited cleanly having printed nothing would be believed.
+//
+// It is one call into the command library and the definition below: what it
+// parses, how it reports and what it exits with are not this file's.
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"strings"
+
+	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 
 	"__MODULE__/common"
 )
@@ -2317,101 +2326,118 @@ var (
 	sourceHash = ""
 )
 
-func usage() string {
-	var sb strings.Builder
-	sb.WriteString("gate — measure one property of this tree.\n\n")
-	sb.WriteString("Usage:\n  gate <name> --envelope\n  gate --list\n\n")
-	sb.WriteString("Prints one JSON envelope on stdout and nothing else. Without --envelope it\n")
-	sb.WriteString("prints nothing and fails: a bare run that printed measurements and exited 0\n")
-	sb.WriteString("would be read as a pass by the first script that wrapped it, and a gate has\n")
-	sb.WriteString("no verdict to give. Run §run <name>§ for a result meant for a person.\n\n")
-	sb.WriteString("Gates:\n")
-	for _, n := range common.GateConcepts() {
-		fmt.Fprintf(&sb, "  %-12s %s\n", n, common.GateSummary(n))
-	}
-	sb.WriteString("\n§--list§ prints every name this project answers, one per line.\n")
-	return sb.String()
+// listing is what --list answers: every name this project measures. A program
+// reads the JSON, where what a gate declares of itself can grow additively; the
+// line form is for a person.
+//
+// It exists because an orchestrator must not hold a second copy of what this
+// project can measure. Asking the entry point is the only way to learn it that
+// cannot go stale.
+type listing struct {
+	Gates []listedGate §json:"gates"§
 }
 
-// isListArg reports whether the argv asks for the gate list and nothing else.
-// Exactly one argument: a request with anything alongside it is ambiguous
-// between listing and measuring, and guessing would print a list to a caller
-// waiting for an envelope.
-func isListArg(args []string) bool {
-	return len(args) == 1 && (args[0] == "--list" || args[0] == "-list" || args[0] == "list")
+// listedGate is one name and what it measures.
+type listedGate struct {
+	Name    string §json:"name"§
+	Summary string §json:"summary"§
 }
 
-// fail prints to stderr and exits non-zero, leaving stdout untouched. Every
-// path out of this program that is not a complete envelope comes through here.
-func fail(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "gate: "+format+"\n", args...)
-	os.Exit(1)
-}
-
-func main() {
-	args := common.NormalizeArgs(os.Args[1:])
-
-	// --list answers "which gates does this project have?", one name per line
-	// on stdout, exit 0.
-	//
-	// It is the only mode besides a measurement that writes to stdout, and it
-	// does not break the envelope rule: a caller that asked for the list did not
-	// ask for a measurement, and a name-per-line stream cannot be mistaken for
-	// an envelope by anything that parses one.
-	//
-	// It exists because an orchestrator must not hold a second copy of what this
-	// project can measure. Asking the entry point is the only way to learn it
-	// that cannot go stale.
-	if isListArg(args) {
-		for _, n := range common.GateNames() {
-			fmt.Println(n)
+// Human is one name per line, which is what a person scanning for the name they
+// want reads fastest.
+func (l listing) Human(w io.Writer) error {
+	for _, g := range l.Gates {
+		if _, err := fmt.Fprintln(w, g.Name); err != nil {
+			return err
 		}
-		return
 	}
+	return nil
+}
 
-	// Help goes to STDERR and exits non-zero, where every other tool here prints
-	// it to stdout and exits 0. Stdout carries the envelope and nothing else — a
-	// caller redirecting stdout to a parser must get an envelope or nothing, and
-	// "nothing" must not look like success.
-	if common.HasHelpFlag(args) {
-		fmt.Fprint(os.Stderr, usage())
-		os.Exit(1)
-	}
+// define is gate's whole surface: the gates this project answers, each taking
+// the envelope flag the gate contract fixes, and the listing beside them.
+func define(repoRoot, sourceHash string) command.Tool {
+	return command.Tool{
+		Project: "gate",
+		Version: sourceHash,
+		Fit: func() *command.Refusal {
+			return primitives.StaleRefusal("gate", repoRoot, sourceHash)
+		},
+		Root: command.Command{
+			Name:    "gate",
+			Summary: "measure one property of this tree",
+			Flags: []command.Flag{{
+				Name:        "list",
+				Type:        command.Boolean,
+				Description: "name every gate this project answers",
+			}},
+			SelectedBy: "list",
+			Action: func(c *command.Call) (command.Result, error) {
+				names := common.GateNames()
+				gates := make([]listedGate, 0, len(names))
+				for _, n := range names {
+					gates = append(gates, listedGate{Name: n, Summary: common.GateSummary(n)})
+				}
+				return listing{Gates: gates}, nil
+			},
 
-	// An unknown name is refused rather than guessed at: a runner asking for a
-	// gate this project does not have must learn that, not receive an empty
-	// measurement that reads like a clean result.
-	name, envelope, err := common.ParseGateArgs(args)
-	if err != nil {
-		fail("%v; run §%s -h§ for usage", err, os.Args[0])
+			// The gates are the project's vocabulary rather than this tool's, so
+			// help describes them instead of listing them: §gate --list§ is that
+			// enumeration's one home.
+			Children:     children,
+			ChildClass:   "<gate>",
+			ChildSummary: "a gate this project answers",
+			EnumeratedBy: "gate --list",
+			ChildFlags: []command.Flag{{
+				Name:        "envelope",
+				Type:        command.Boolean,
+				Description: "write the measurement as one envelope on stdout",
+				Protocol:    "the gate contract",
+			}},
+			ChildValidate: requireEnvelope,
+			ChildAction:   func(c *command.Call) (command.Result, error) { return measure(repoRoot, c) },
+		},
 	}
-	if !envelope {
-		fail("refusing to measure without --envelope; run §run %s§ for a result "+
-			"meant for a person", name)
-	}
+}
 
-	// Stale logic would measure this tree with yesterday's gates and print a
-	// well-formed envelope about it, which is the one failure nothing downstream
-	// could detect.
-	if reason := common.StaleReason(repoRoot, sourceHash); reason != "" {
-		fail("%s — run %s", reason, common.MakeCmd())
+// children is the gate set this project answers.
+func children() []command.Command {
+	names := common.GateNames()
+	set := make([]command.Command, 0, len(names))
+	for _, n := range names {
+		set = append(set, command.Command{Name: n, Summary: common.GateSummary(n)})
 	}
+	return set
+}
 
-	env, err := common.MeasureGate(repoRoot, name)
+// requireEnvelope refuses a measurement nobody can read as one.
+//
+// A bare run that printed measurements and exited 0 would be read as a pass by
+// the first script that wrapped it, and a gate has no verdict to give.
+func requireEnvelope(c *command.Call) []error {
+	if c.Bool("envelope") {
+		return nil
+	}
+	return []error{fmt.Errorf(
+		"%s measures %s, and writes it only with --envelope; run §run %s§ for a result meant for a person",
+		c.Name(), common.GateSummary(c.Name()), c.Name())}
+}
+
+// measure runs one gate. Nothing is written here: the envelope is returned, and
+// the library writes it once, whole — which is how a reader tells "measured
+// nothing" from "measured and reported" without asking the gate.
+func measure(repoRoot string, c *command.Call) (command.Result, error) {
+	envelope, err := common.MeasureGate(repoRoot, c.Name())
 	if err != nil {
 		// Nothing was measured. No envelope, because a partial one is not a
 		// measurement and must not parse as one.
-		fail("%v", err)
+		return nil, err
 	}
+	return common.Measured(envelope), nil
+}
 
-	// The envelope is written whole, in one write. A run killed part-way leaves
-	// output that does not parse, which is how a reader tells "measured nothing"
-	// from "measured and reported" without asking the gate.
-	out, err := json.Marshal(env)
-	if err != nil {
-		fail("could not encode the envelope: %v", err)
-	}
-	os.Stdout.Write(append(out, '\n'))
+func main() {
+	os.Exit(command.Run(define(repoRoot, sourceHash), os.Args[1:], command.Stdio()))
 }
 `
 
@@ -2424,12 +2450,18 @@ const cmdRunGoRaw = `// Command run asks one gate for a measurement and reaches 
 // what came back. Running a single gate is not a lesser case — it is faster than
 // everything that blocks a change from landing, and it is what someone
 // iterating on one failure actually wants.
+//
+// It is one call into the command library and the definition below: what it
+// parses, how it reports and what it exits with are not this file's.
 package main
 
 import (
 	"fmt"
+	"io"
 	"os"
-	"strings"
+
+	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 
 	"__MODULE__/common"
 )
@@ -2440,62 +2472,114 @@ var (
 	sourceHash = ""
 )
 
-func usage() string {
-	var sb strings.Builder
-	sb.WriteString("run — measure one gate and judge what it measured.\n\n")
-	sb.WriteString("Usage:\n  run <gate> [-help]\n  run <gate> --verdict < envelope\n\n")
-	sb.WriteString("Runs bin/gate <gate> --envelope, then prints each measurement beside the\n")
-	sb.WriteString("term it was judged on. Exit 0 means every capped measurement is within its\n")
-	sb.WriteString("cap; non-zero means one is not, or that nothing could be measured.\n\n")
-	sb.WriteString("With --verdict it judges an envelope it is GIVEN, on stdin, and runs no\n")
-	sb.WriteString("gate: it prints one JSON verdict on stdout and nothing else. That is the\n")
-	sb.WriteString("mode an external runner asks — it spawns the gate itself, because a judge\n")
-	sb.WriteString("that ran its own measurement would be the runner, and the runner comes from\n")
-	sb.WriteString("outside the tree. The verdict is the JSON, not the exit status.\n\n")
-	sb.WriteString("Gates:\n")
-	for _, n := range common.GateConcepts() {
-		fmt.Fprintf(&sb, "  %-12s %s\n", n, common.GateSummary(n))
+// listing is what --list answers: the two kinds of name a caller outside this
+// tree can ask this project for — a command it can execute, and a gate it can
+// measure. Both are discovered rather than declared, so neither can go stale,
+// and one object carries them together because a caller that must not confuse
+// the two needs to see the whole vocabulary at once.
+type listing struct {
+	Commands []string §json:"commands"§
+	Gates    []string §json:"gates"§
+}
+
+// Human is one name per line with its kind, because the two lists answer
+// different questions — what this project builds, and what it answers — and a
+// reader who cannot tell which is which has to know the vocabulary already to
+// use the output that exists to teach it.
+func (l listing) Human(w io.Writer) error {
+	for _, c := range l.Commands {
+		if _, err := fmt.Fprintf(w, "command  %s\n", c); err != nil {
+			return err
+		}
 	}
-	capped := common.CappedMetrics(repoRoot)
-	if len(capped) > 0 {
-		fmt.Fprintf(&sb, "\nJudged against a cap: %s\n", strings.Join(capped, ", "))
-	} else {
-		fmt.Fprintf(&sb, "\nThresholds defined in %s\n", common.ManifestFile)
+	for _, g := range l.Gates {
+		if _, err := fmt.Fprintf(w, "gate     %s\n", g); err != nil {
+			return err
+		}
 	}
-	sb.WriteString("Anything else is reported and not judged.\n")
-	return sb.String()
+	return nil
+}
+
+// define is run's whole surface: the gates this project answers, each judged or
+// measured, and the discovery query beside them.
+func define(repoRoot, sourceHash string) command.Tool {
+	return command.Tool{
+		Project: "run",
+		Version: sourceHash,
+		Fit: func() *command.Refusal {
+			return primitives.StaleRefusal("run", repoRoot, sourceHash)
+		},
+		Root: command.Command{
+			Name:    "run",
+			Summary: "measure one gate and judge what it measured",
+			Flags: []command.Flag{{
+				Name:        "list",
+				Type:        command.Boolean,
+				Description: "name what this project builds and what it answers",
+			}},
+			SelectedBy: "list",
+			Action:     func(c *command.Call) (command.Result, error) { return list(repoRoot) },
+
+			Children:     children,
+			ChildClass:   "<gate>",
+			ChildSummary: "a gate this project answers",
+			EnumeratedBy: "run --list",
+			ChildFlags: []command.Flag{{
+				Name:        "verdict",
+				Type:        command.Boolean,
+				Description: "judge the envelope on stdin, and run no gate",
+				Protocol:    "the gate contract",
+			}},
+			ChildAction: func(c *command.Call) (command.Result, error) { return measureOrJudge(repoRoot, c) },
+		},
+	}
+}
+
+// children is the gate set this project answers.
+func children() []command.Command {
+	names := common.GateNames()
+	set := make([]command.Command, 0, len(names))
+	for _, n := range names {
+		set = append(set, command.Command{Name: n, Summary: common.GateSummary(n)})
+	}
+	return set
+}
+
+// list says what this project builds and what it answers.
+//
+// It is the discovery query: it is how anything outside the tree learns both
+// without holding a copy that can go stale.
+func list(repoRoot string) (command.Result, error) {
+	commands, err := common.CommandNames(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("cannot say what this project builds: %w", err)
+	}
+	return listing{Commands: commands, Gates: common.GateNames()}, nil
+}
+
+// measureOrJudge runs the gate, or judges an envelope it is handed.
+//
+// In the judging mode nothing is spawned: the envelope arrives on stdin from
+// whoever ran the gate. That is the mode an external runner asks — it spawns
+// the gate, because a judge that ran its own measurement would be the runner,
+// and the runner comes from outside the tree.
+func measureOrJudge(repoRoot string, c *command.Call) (command.Result, error) {
+	if c.Bool("verdict") {
+		verdict, err := common.JudgeStdin(repoRoot, c.Name(), c.In)
+		if err != nil {
+			return nil, err
+		}
+		return verdict, nil
+	}
+	judged, err := common.RunOneGate(repoRoot, common.GateBinary(repoRoot), c.Name(), c.Narrate)
+	if err != nil {
+		return nil, err
+	}
+	return judged, nil
 }
 
 func main() {
-	args := common.NormalizeArgs(os.Args[1:])
-	if common.HasHelpFlag(args) {
-		fmt.Print(usage())
-		os.Exit(0)
-	}
-	common.CheckStale(repoRoot, sourceHash)
-
-	name, verdict, err := common.ParseRunArgs(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "run: %v; run §%s -h§ for usage\n", err, os.Args[0])
-		os.Exit(2)
-	}
-
-	// The judging mode. Nothing is spawned: the envelope arrives on stdin from
-	// whoever ran the gate, and stdout carries one verdict and nothing else.
-	// CheckStale has already run above, so stale tooling exits before it can
-	// print a verdict rather than answering with terms nobody currently holds.
-	if verdict {
-		if err := common.JudgeStdin(repoRoot, name, os.Stdin, os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "run: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	if err := common.RunOneGate(repoRoot, common.GateBinary(repoRoot), name); err != nil {
-		fmt.Fprintf(os.Stderr, "run: %v\n", err)
-		os.Exit(1)
-	}
+	os.Exit(command.Run(define(repoRoot, sourceHash), os.Args[1:], command.Stdio()))
 }
 `
 
@@ -2541,21 +2625,69 @@ const baselinesJSON = `{}
 
 // ───────────────────────── docs ─────────────────────────
 
-// docsIndexMd is the map of docs/. It carries no relative link, so the tree it
-// is written into cannot fail a documentation link check on the scaffolder's
-// own output before the adopter has written anything.
+// docsIndexMd is the map of docs/, and a scaffolded project must be born with a
+// conformant one: org/normative.md, Location makes the index the one per-project
+// file that names the project's STATUS QUERY, "the one per-project fact this
+// shared document cannot carry". An index without it is a tree that is
+// non-conformant from its first commit.
+//
+// It carries no relative link, so the tree it is written into cannot fail a
+// documentation link check on the scaffolder's own output before the adopter has
+// written anything. That is also why the corpus is named as a directory in plain
+// text rather than linked: org/normative.md, Location fixes that form — the
+// corpus is "listed once, as the directory, by way of the stamp it carries", so
+// "a sync adds and removes members without editing a file the project owns". The
+// entry is therefore already correct both before the corpus arrives and after,
+// and the sync that brings it edits nothing here.
+//
+// What this does NOT emit is the corpus itself, the legal set or the CLA
+// workflow. A vendored copy is sanctioned only where a machine checks it
+// (org/normative.md, Links) — verified against its stamp — and a copy frozen
+// into this scaffolder at build time is checked by nothing and stale from the
+// day after it is cut. The corpus "changes at its home, and reaches the project
+// by sync" (org/normative.md, Location), which is provisioning's act and not
+// this one's.
 var docsIndexMd = substituteBackticks(docsIndexMdRaw)
 
 const docsIndexMdRaw = `# Documentation Index
 
-This is the map of §docs/§. Every document in this directory is listed below, so
-one file answers "what is written down here?" — a document nobody can reach from
-the index is one nobody reads, and one nobody updates.
+This is the map of §docs/§. Every tracked file under it is listed here, wherever
+it lives — the section an entry sits under is where its binding status is written
+down. A document nobody can reach from the index is one nobody reads, and one
+nobody updates.
+
+**This project's status query.** Each root document's tag is a GitHub label,
+spelled as the file's basename minus §.md§, and the remaining work for a document
+is:
+
+> §gh issue list --label <tag> --state open --limit 200§
+
+§--state open§ and §--limit 200§ are both written out deliberately: §gh issue
+list§ defaults to a limit of 30, so a specification with more remaining work than
+that would silently under-report and read as nearly done.
 
 ## Specifications
 
 _Nothing yet._ Add a line here in the same commit that adds the document; an
 index brought up to date afterwards is an index that was wrong in between.
+
+## Organization wide corpus
+
+**Binding.** Every document under §docs/org/§ binds this project exactly as a
+specification in this directory's root does. It is vendored from its home
+repository and never edited here: an issue about one of those documents is filed
+where the document originates, and what this project files locally under their
+tags is its own compliance gaps.
+
+The corpus is listed once, as the directory, with its §docs/org/stamp.json§
+naming the release these copies came from and every member — so the corpus's map
+is the corpus's own, and a sync adds or removes members without editing this
+file.
+
+- §docs/org/§ — the organization-wide corpus, at the release its stamp names.
+
+Provisioning delivers it. A checkout that has not been provisioned has no
+§docs/org/§ yet, and the entry above is what it will be when it does.
 `
 
 // ───────────────────────── claude config ─────────────────────────
