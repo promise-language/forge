@@ -614,7 +614,14 @@ its own first consumer), and copies no helper `primitives` carries:
 - the committed trampolines, `make` and `make.cmd`;
 - the layout above: a definition returning `tooling.Standard()`, and the five `main`s;
 - `tools/gates/thresholds.json` holding the standard caps, and an empty `baselines.json`;
-- a `go.mod` requiring forge at the release `cmd/init` was built from;
+- a `go.mod` requiring forge at the release `cmd/init` was built from, and the `go.sum`
+  that pin is verified against — without it the emitted module does not build, so the
+  first `./make` would fail before it compiled anything;
+- `docs/index.md`, carrying this project's status query and listing `docs/org/` once as
+  the directory, so a scaffolded tree satisfies the docs structure every managed project
+  holds from its first commit (org/normative.md, Location). The corpus itself is not
+  emitted: it reaches a project by sync, and a copy frozen into the scaffolder would be
+  one no stamp checks;
 - the committed wiring for the agent guard, `.claude/settings.json`. It emits no `.githooks/`
   wiring: the commit guard and the hook that reaches it are both `workspace setup`'s
   ([blueprint.md](blueprint.md), The commit gate hook);
