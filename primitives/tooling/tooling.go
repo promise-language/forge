@@ -59,7 +59,8 @@ const (
 // carry (docs/project-tools.md, The definition).
 const InstanceSeparator = ":"
 
-// MetricType is what kind of number a measurement is. The set is closed.
+// MetricType is what kind of value a measurement is. The set is base's
+// (gate-contract.md, What a metric declares), and it is closed.
 type MetricType string
 
 const (
@@ -67,9 +68,15 @@ const (
 	Int MetricType = "int"
 	// Float measures a quantity that is not a count.
 	Float MetricType = "float"
+	// Bool measures a property — builds for a target, carries the licence
+	// header. It is for a subject that genuinely has two states, and never for
+	// summarizing one that has more: a count collapsed to a bool has thrown
+	// away the magnitude that lets a ratchet move by degrees and a regression
+	// be located.
+	Bool MetricType = "bool"
 )
 
-// Metric is a metric's declaration: the name a gate reports, the kind of number
+// Metric is a metric's declaration: the name a gate reports, the kind of value
 // it is, and the unit it is in. It carries no value — the declaration and the
 // measurement are a claim and its check (docs/project-tools.md, Gate).
 type Metric struct {
@@ -86,6 +93,10 @@ func Bytes(name string) Metric { return Metric{Name: name, Type: Int, Unit: "byt
 
 // Percent declares a measurement of a proportion.
 func Percent(name string) Metric { return Metric{Name: name, Type: Float, Unit: "percent"} }
+
+// Property declares a measurement of whether something holds. It carries no
+// unit: a property is not measured in anything.
+func Property(name string) Metric { return Metric{Name: name, Type: Bool} }
 
 // Gate is one gate the project answers: a leaf that measures, or a composition
 // of other gates.

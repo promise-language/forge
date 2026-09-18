@@ -51,7 +51,7 @@ func TestTheRunnerCrossesTheProcessBoundary(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := fixture(t, "")
-			terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+			terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 			standIn(t, root, c.gate)
 			p := counting("x", []Metric{Count("n")}, Measured{}, nil)
 
@@ -100,7 +100,7 @@ func TestTheRunnerCrossesTheProcessBoundary(t *testing.T) {
 // write one.
 func TestAChildsOwnConditionIsWhatTheRunnerReports(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 	standIn(t, root, `case "$*" in
   *-version*) printf '%s' '{"refusal":"unstamped","tool":"gate","detail":"this binary carries no stamp","recovery":["./make"]}' ;;
 esac
@@ -126,7 +126,7 @@ exit 3`)
 // the refusal object, rather than reporting the tree as bad.
 func TestTheRunnerAnswersAChildsRefusalWithTheRefusalStatus(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 	write(t, root, filepath.FromSlash("tools/build/cmd/gate/main.go"), "package main\n")
 	standIn(t, root, "exit 3")
 	git(t, root, "add", "-A")
@@ -158,7 +158,7 @@ func TestTheRunnerAnswersAChildsRefusalWithTheRefusalStatus(t *testing.T) {
 // refuses only when it actually has to reach the binary.
 func TestTheRunnerRefusesWhenTheGateIsNotBuilt(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 	p := counting("x", []Metric{Count("n")}, Measured{}, nil)
 
 	r, _ := run(t, p, root)

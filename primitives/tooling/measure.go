@@ -14,13 +14,14 @@ import (
 	"strconv"
 )
 
-// Measurement is one number a gate measured, with the type and the unit its
+// Measurement is one value a gate measured, with the type and the unit its
 // declaration gave it.
 type Measurement struct {
 	Name  string
 	Type  MetricType
 	Int   int64
 	Float float64
+	Bool  bool
 	Unit  string
 }
 
@@ -34,21 +35,41 @@ func Quantity(name string, v float64, unit string) Measurement {
 	return Measurement{Name: name, Type: Float, Float: v, Unit: unit}
 }
 
+// Reported is a measurement of whether a property holds.
+func Reported(name string, v bool) Measurement {
+	return Measurement{Name: name, Type: Bool, Bool: v}
+}
+
 // Number is the value as a float, for comparison against a term. Widening is
 // safe here and nowhere else: the judge compares, it does not store, so nothing
 // downstream can mistake the widened form for what was measured.
+//
+// False is worse than true, so a property is one and zero in that order and in
+// this one place. That is what lets at_least mean "must be true" and at_most
+// "must be false" through the single comparison the judge already makes, rather
+// than through a second one written for bools.
 func (m Measurement) Number() float64 {
-	if m.Type == Int {
+	switch m.Type {
+	case Int:
 		return float64(m.Int)
+	case Bool:
+		if m.Bool {
+			return 1
+		}
+		return 0
 	}
 	return m.Float
 }
 
 // String renders the value in its own type — a count never grows a decimal
-// point, and a quantity never loses one.
+// point, a quantity never loses one, and a property is true or false rather
+// than the one and zero it is compared as.
 func (m Measurement) String() string {
-	if m.Type == Int {
+	switch m.Type {
+	case Int:
 		return strconv.FormatInt(m.Int, 10)
+	case Bool:
+		return strconv.FormatBool(m.Bool)
 	}
 	return strconv.FormatFloat(m.Float, 'f', 1, 64)
 }
@@ -82,6 +103,11 @@ func (m Measurement) MarshalJSON() ([]byte, error) {
 		w.Value = json.RawMessage(strconv.FormatInt(m.Int, 10))
 	case Float:
 		w.Value = json.RawMessage(strconv.FormatFloat(m.Float, 'f', -1, 64))
+	case Bool:
+		// true and false, never 1 and 0. Encoded as numbers a property invites
+		// comparison and arithmetic that mean nothing, and nothing distinguishes
+		// it from a count that happens to be small.
+		w.Value = json.RawMessage(strconv.FormatBool(m.Bool))
 	default:
 		return nil, fmt.Errorf("metric %q has no type", m.Name)
 	}
@@ -103,6 +129,10 @@ func (m *Measurement) UnmarshalJSON(b []byte) error {
 		}
 	case Float:
 		if err := json.Unmarshal(w.Value, &m.Float); err != nil {
+			return fmt.Errorf("metric %q is declared %s but its value is not: %w", w.Name, w.Type, err)
+		}
+	case Bool:
+		if err := json.Unmarshal(w.Value, &m.Bool); err != nil {
 			return fmt.Errorf("metric %q is declared %s but its value is not: %w", w.Name, w.Type, err)
 		}
 	default:

@@ -12,6 +12,7 @@ line of customization.
 
 - **Which tools a project must have, and who builds each one.** That is workspace's
   `tool-contract.md`, The two sets and Required tools.
+- **Where the judging terms live and what is in them.** That is the same document's §3.
 - **The envelope, the manifest, and what a runner may conclude from a gate.** That is base's
   `gate-contract.md`.
 - **Which gates a flow asks for, and what a verdict must carry.** That is flow's
@@ -507,34 +508,25 @@ satisfied by construction:**
 
 ```json
 {"acceptable": false,
- "thresholds": {"failed_tests": {"direction": "down", "cap": 0}},
+ "thresholds": {"failed_tests": {"direction": "at_most", "cap": 0}},
  "detail": "failed_tests is 2, cap 0, in tools-build. Fix the failing tests; bin/run tested:tools-build measures that module alone."}
 ```
 
 ## The terms
 
-> **A term a run may move is a baseline. A term only a person moves is a cap.** Caps live in
-> `tools/gates/thresholds.json`, and baselines in `tools/gates/baselines.json`. A metric may have
-> both, and when it does, they agree on direction.
+> **A term a run may move is a baseline. A term only a person moves is a cap.** That split is why
+> this implementation has both a judge and a ratchet.
 
-```json
-{"failed_tests":       {"direction": "down", "cap": 0},
- "worktree_free_bytes": {"direction": "up",   "cap": 1073741824}}
-```
+**Where the two files are, what their entries hold, and what `direction` means are workspace's
+`tool-contract.md` §3** — the caps in `tools/gates/thresholds.json` and the baselines in
+`tools/gates/baselines.json`, `direction` as `at_most` or `at_least`, and the shape of an entry in
+each. A metric's `type` is base's `gate-contract.md`, What a metric declares. This document defines
+none of them again: a format with two homes is a format that will be written two ways.
 
-```json
-{"test_count":         {"direction": "up", "value": 412},
- "statement_coverage": {"direction": "up", "targets": {"linux/amd64": 81.9, "darwin/arm64": 82.1}}}
-```
-
-- **`direction` is base's vocabulary**, with the meaning that document gives it (gate-contract.md,
-  What a metric declares).
-- **A cap is a bound no history relaxes.**
-- **A baseline is the best value a complete, green run has recorded.**
-  - A baseline with a single `value` holds on every target.
-  - A metric that genuinely differs by platform records its baselines per target, under `targets`.
-- **The files are read strictly.** The judge refuses to answer, naming the file and the entry, when
-  an entry has an unknown key, a missing field, an unknown direction, or both `value` and `targets`.
+- **Nothing outside that definition is accepted.** The library reads the two files strictly, and the
+  judge refuses to answer, naming the file and the entry, when an entry has an unknown key, a
+  missing field, an unknown direction, or both `value` and `targets`.
+- **A metric may have both a cap and a baseline**, and when it does, they agree on direction.
 
 > **Only `verify` moves a baseline, and only forward.** After every measuring stage has passed, and
 > before the tree is recorded, `verify` moves each baseline whose metric it measured completely, in
