@@ -1315,7 +1315,7 @@ func keysOf(m map[string]bool) []string {
 
 // The wiring cmd/init commits into a target repository has one home, and it is
 // the constant that emits it (docs/blueprint.md, The agent guard): "The file's
-// text is the settingsJSON constant in cmd/init/main.go, which is what writes
+// text is the settingsJSON constant in cmd/init/main.go, which is what emits
 // it; this document does not carry a second copy of it", because "a prose copy
 // of the wiring is the first place the two spellings part company".
 // TestScaffoldedSettingsWireTheGuardOnBothEvents fixes what that constant says;
@@ -1479,6 +1479,49 @@ func TestScaffoldedSettingsWireTheGuardOnBothEvents(t *testing.T) {
 	}
 	if strings.Contains(settingsJSON, "bin/guard") {
 		t.Error("the emitted settings still name the local twin bin/guard")
+	}
+}
+
+// The same decision, applied to the tree it was taken in. `.claude/settings.json`
+// is provisioned AND committed, and the committing end is the project's
+// (docs/blueprint.md, Tools the project does not build) — this repository
+// included, since it is the first consumer of what it scaffolds
+// (docs/primitives.md, This repository is its own first consumer).
+//
+// Untracking it here would be invisible from every direction but the one that
+// matters. `workspace setup` rewrites the file on every run, so it stays on disk
+// in this checkout whatever git holds; the conformance that reads it reads the
+// settings in FORCE rather than the ones committed; and every other test in this
+// package reads the settingsJSON constant, never the tree. Only a fresh clone
+// finds out, by carrying no agent guard at all.
+//
+// Unlike the ignore checks above this one needs no control: the answer is
+// compared against the path, so a git that answers nothing — or answers about
+// something else — fails rather than passing as "tracked".
+func TestThisRepositoryCommitsTheAgentGuardWiring(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	git := func(args ...string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = filepath.Join("..", "..")
+		out, err := cmd.Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	// A source tree that is not a checkout — an extracted archive, a vendored
+	// copy — holds no answer to this question, and a failure there would name a
+	// defect that is not in the repository.
+	if _, err := git("rev-parse", "--is-inside-work-tree"); err != nil {
+		t.Skip("not a git checkout")
+	}
+	const wiring = ".claude/settings.json"
+	tracked, err := git("ls-files", "--", wiring)
+	if err != nil {
+		t.Fatalf("git ls-files %s: %v", wiring, err)
+	}
+	if tracked != wiring {
+		t.Errorf("git tracks %q for %s — provisioning writes that file and the project commits it, so a clone of this repository would carry no agent-guard wiring at all", tracked, wiring)
 	}
 }
 
