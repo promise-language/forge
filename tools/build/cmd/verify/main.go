@@ -1,44 +1,21 @@
-// Command verify is the commit gate: it repairs what has one right answer,
-// then measures what remains.
+// Command verify is the commit gate: it repairs what has one right answer, then
+// measures what remains.
 //
-// It is one call into the command library and the definition below: what it
-// parses, how it reports and what it exits with are not this file's
-// (docs/command-line.md, One implementation).
+// It is one call into the library and the definition beside it: what it parses,
+// how it reports, what it runs and what it exits with are not this file's
+// (docs/project-tools.md, Layout).
 package main
 
 import (
 	"os"
 
-	"github.com/promise-language/forge/primitives/command"
+	"github.com/promise-language/forge/primitives/tooling"
 	"github.com/promise-language/forge/tools/build/common"
 )
 
-// Injected by the meta-builder via -ldflags at build time; empty otherwise.
-var (
-	repoRoot   = ""
-	sourceHash = ""
-)
-
-// define is verify's whole surface.
-func define(repoRoot, sourceHash string) command.Tool {
-	return command.Tool{
-		Project: "verify",
-		Version: sourceHash,
-		Fit:     common.Fit("verify", repoRoot, sourceHash),
-		Root: command.Command{
-			Name:    "verify",
-			Summary: "the commit gate: repair what has one right answer, then measure what remains",
-			Action: func(c *command.Call) (command.Result, error) {
-				result, err := common.RunVerify(repoRoot, c.Narrate)
-				if err != nil {
-					return nil, err
-				}
-				return result, nil
-			},
-		},
-	}
-}
+// stamp is written at link time by ./make.
+var stamp string
 
 func main() {
-	os.Exit(command.Run(define(repoRoot, sourceHash), os.Args[1:], command.Stdio()))
+	os.Exit(tooling.VerifyTool(common.Define(), stamp).Run(os.Args[1:]))
 }

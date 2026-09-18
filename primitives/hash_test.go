@@ -115,21 +115,65 @@ func TestSourceHashNamesFilesFromTheRepoRoot(t *testing.T) {
 	}
 }
 
-// Only source and the module manifests are tool source. A build artefact or a
-// README landing in the tree must not report every binary stale.
-func TestSourceHashReadsOnlySourceAndManifests(t *testing.T) {
+// Every regular file in the set is tool source, not only the .go files: a
+// tool's embedded template is part of what it does, and a .go-only hash would
+// let an edit to one leave every binary claiming to be current
+// (docs/project-tools.md, Make step 2).
+func TestSourceHashReadsEveryFileInTheSet(t *testing.T) {
 	repo := hashFixture(t)
 	before := hash(t, repo)
 
-	write(t, repo, "tools/build/README.md", "notes\n")
-	write(t, repo, "tools/build/bin/verify", "\x7fELF binary\n")
-	if after := hash(t, repo); after != before {
-		t.Error("a non-source file changed the digest")
+	write(t, repo, "tools/build/cmd/init/template.txt", "a template a tool embeds\n")
+	after := hash(t, repo)
+	if after == before {
+		t.Error("an embedded template did not change the digest — editing one would leave every binary claiming to be current")
 	}
 
 	write(t, repo, "tools/build/go.sum", "example v1.0.0 h1:x=\n")
-	if after := hash(t, repo); after == before {
+	if next := hash(t, repo); next == after {
 		t.Error("go.sum is not hashed — raising a pinned version would not report a binary stale")
+	}
+}
+
+// A dot file is not tool source. Editors, caches and the tools' own scratch all
+// write them, and a hash that read them would report every binary stale over a
+// file nothing compiles.
+func TestSourceHashSkipsDotFilesAndDotDirectories(t *testing.T) {
+	repo := hashFixture(t)
+	before := hash(t, repo)
+
+	write(t, repo, "tools/build/.DS_Store", "\x00\x01\x02")
+	write(t, repo, "tools/build/.cache/entry", "whatever a tool left here\n")
+	if after := hash(t, repo); after != before {
+		t.Error("a dot file changed the digest")
+	}
+}
+
+// A package directory is named with a trailing /*, and then its own files are
+// the set: `go list` reports each package a tool imports, and hashing a
+// package's subdirectories too would report a tool stale over a package it
+// never imported.
+func TestSourceHashNarrowsAPackageDirectoryToItsOwnFiles(t *testing.T) {
+	repo := t.TempDir()
+	write(t, repo, "lib/a.go", "package lib\n")
+	write(t, repo, "lib/unused/b.go", "package unused\n")
+
+	before := hash(t, repo, "lib/*")
+	write(t, repo, "lib/unused/b.go", "package unused // edited\n")
+	if after := hash(t, repo, "lib/*"); after != before {
+		t.Error("a package nothing imported changed the digest of the package that was named")
+	}
+
+	write(t, repo, "lib/a.go", "package lib // edited\n")
+	if after := hash(t, repo, "lib/*"); after == before {
+		t.Error("the named package's own file did not change the digest")
+	}
+
+	// Named plainly, the same directory is a tree, which is what tools/build is.
+	tree := hash(t, repo, "lib")
+	write(t, repo, "lib/unused/b.go", "package unused // edited twice\n")
+	if after := hash(t, repo, "lib"); after == tree {
+		t.Error("a tree did not cover its subdirectory")
 	}
 }
 

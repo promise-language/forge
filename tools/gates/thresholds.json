@@ -1,34 +1,12 @@
 {
-  "unformatted_files": {
-    "direction": "at_most",
-    "cap": 0
-  },
-  "unbuildable_packages": {
-    "direction": "at_most",
-    "cap": 0
-  },
-  "vet_findings": {
-    "direction": "at_most",
-    "cap": 0
-  },
-  "failed_tests": {
-    "direction": "at_most",
-    "cap": 0
-  },
-  "failed_packages": {
-    "direction": "at_most",
-    "cap": 0
-  },
-  "worktree_free_bytes": {
-    "direction": "at_least",
-    "cap": 1073741824
-  },
-  "build_cache_free_bytes": {
-    "direction": "at_least",
-    "cap": 1073741824
-  },
-  "statement_coverage": {
-    "direction": "at_least",
-    "cap": 75
-  }
+  "unformatted_files": { "direction": "down", "cap": 0 },
+  "unbuildable_packages": { "direction": "down", "cap": 0 },
+  "vet_findings": { "direction": "down", "cap": 0 },
+  "failed_tests": { "direction": "down", "cap": 0 },
+  "failed_packages": { "direction": "down", "cap": 0 },
+  "unstamped_files": { "direction": "down", "cap": 0 },
+  "missing_toolchains": { "direction": "down", "cap": 0 },
+  "worktree_free_bytes": { "direction": "up", "cap": 1073741824 },
+  "cache_free_bytes": { "direction": "up", "cap": 1073741824 },
+  "statement_coverage": { "direction": "up", "cap": 75 }
 }
