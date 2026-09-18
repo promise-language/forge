@@ -4,8 +4,9 @@ package tooling
 //
 // A term a run may move is a baseline. A term only a person moves is a cap.
 // Where the two files live, what their entries hold and what `direction` means
-// are workspace's tool-contract.md §3. What is here is how this library reads
-// them: strictly, and with the ratchet verify moves.
+// are base's gate-contract.md, Caps and baselines; workspace's tool-contract.md,
+// Layout, is what places them in a managed project. What is here is how this
+// library reads them: strictly, and with the ratchet verify moves.
 //
 // The terms are kept apart from the code under measurement so the party under
 // judgement cannot move them in the same change, which is why the paths are
@@ -29,9 +30,9 @@ const (
 	BaselinesFile  = "tools/gates/baselines.json"
 )
 
-// Direction is the side of its term a measurement must be on. It is workspace's
-// tool-contract.md §3's vocabulary, with the meaning that section gives it. The
-// set is closed: an unknown value is refused at load.
+// Direction is the side of its term a measurement must be on. It is base's
+// vocabulary, with the meaning that document gives it (gate-contract.md, What a
+// metric declares). The set is closed: an unknown value is refused at load.
 type Direction string
 
 const (

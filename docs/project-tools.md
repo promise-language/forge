@@ -12,9 +12,11 @@ line of customization.
 
 - **Which tools a project must have, and who builds each one.** That is workspace's
   `tool-contract.md`, The two sets and Required tools.
-- **Where the judging terms live and what is in them.** That is the same document's §3.
 - **The envelope, the manifest, and what a runner may conclude from a gate.** That is base's
   `gate-contract.md`.
+- **Where the judging terms live and what is in them.** That is the same document, Caps and
+  baselines; workspace's `tool-contract.md`, Layout, is what places the two files in a managed
+  project.
 - **Which gates a flow asks for, and what a verdict must carry.** That is flow's
   `gates-and-commands.md`.
 - **How any tool parses, reports and exits.** That is [command-line.md](command-line.md), which
@@ -492,6 +494,10 @@ satisfied by construction:**
 - **Every term a metric has is applied**, cap and baseline alike, and every one must hold.
 - **An integer metric is compared as an integer.** A term that is not a whole number, for an integer
   metric, is a defect in the term. The judge cannot answer, rather than rounding.
+- **A property is judged by the comparison every other measurement is judged by**, with `false`
+  below `true` as base's `gate-contract.md`, What a metric declares, fixes it. A second comparison
+  written for properties would be a second answer to what a term means. What the verdict states is
+  `true` or `false`, never the order they were compared in.
 - **An incomplete run is never acceptable.**
 - **A metric with no term is reported as not judged**, and cannot fail.
 - **An envelope none of whose metrics has a term cannot be judged.** `run --verdict` writes nothing
@@ -517,11 +523,14 @@ satisfied by construction:**
 > **A term a run may move is a baseline. A term only a person moves is a cap.** That split is why
 > this implementation has both a judge and a ratchet.
 
-**Where the two files are, what their entries hold, and what `direction` means are workspace's
-`tool-contract.md` §3** — the caps in `tools/gates/thresholds.json` and the baselines in
-`tools/gates/baselines.json`, `direction` as `at_most` or `at_least`, and the shape of an entry in
-each. A metric's `type` is base's `gate-contract.md`, What a metric declares. This document defines
-none of them again: a format with two homes is a format that will be written two ways.
+**Where the two files are and what their entries hold are base's `gate-contract.md`, Caps and
+baselines; what `direction` means and what a metric's `type` may be are that document's What a
+metric declares.** Workspace's `tool-contract.md`, Layout, is what places the two files in a managed
+project. This section defines none of it again, and does not restate it either — not the paths, not
+the entry shapes, not the words `direction` takes. A format with two homes is a format that will be
+written two ways, and the second home is the one that goes stale.
+
+What is here is how this library reads that definition.
 
 - **Nothing outside that definition is accepted.** The library reads the two files strictly, and the
   judge refuses to answer, naming the file and the entry, when an entry has an unknown key, a
