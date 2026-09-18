@@ -238,6 +238,77 @@ func TestMissingIgnoreRulesReadsRulesNotText(t *testing.T) {
 	}
 }
 
+// One run writes both the emitted files and the .gitignore beside them, and the
+// two must not disagree: what the scaffolder emits, it emits to be COMMITTED.
+// `.claude/settings.json` is the case that makes this load-bearing — it is
+// committed precisely so the agent guard is live in a checkout provisioning has
+// never reached (docs/blueprint.md, Tools the project does not build), so a run
+// that emitted it into a tree ignoring it would produce exactly the state the
+// decision exists to prevent, and produce it silently: the file is on disk, the
+// scaffolder reports it written, and the clone carries no wiring at all.
+//
+// The per-clone sibling one directory apart is why a matcher is not enough.
+// `.claude/settings.local.json` IS ignored, and widening that entry to
+// `.claude/` — the spelling every other per-clone entry uses — passes every
+// other check in this file: the settings file is still emitted, no .githooks/
+// appears, the wiring still parses, and every path in perClonePaths is still in
+// the .gitignore, because the test for that is derived from the same list.
+//
+// git answers the question rather than a rule-matcher written here. A second
+// reading of .gitignore semantics is the copy that agrees with the
+// implementation and disagrees with the tool that actually decides.
+func TestNoEmittedFileIsIgnoredByTheGitignoreTheSameRunWrites(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	dir := t.TempDir()
+	for _, f := range files() {
+		if _, err := writeFile(dir, f, "example/tools/build", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ensureGitignore(dir); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		var status *exec.ExitError
+		if errors.As(err, &status) {
+			return string(out), status.ExitCode()
+		}
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return string(out), 0
+	}
+	if out, code := git("init"); code != 0 {
+		t.Fatalf("git init failed (%d):\n%s", code, out)
+	}
+
+	var emitted []string
+	for _, f := range files() {
+		emitted = append(emitted, f.path)
+	}
+	// check-ignore exits 0 when at least one path is ignored and names the ones
+	// that are; 1 when none is. Anything else is git refusing the question.
+	if out, code := git(append([]string{"check-ignore", "--"}, emitted...)...); code == 0 {
+		t.Errorf("the scaffolder emits files its own .gitignore ignores, so a clone carries none of them:\n%s", out)
+	} else if code != 1 {
+		t.Fatalf("git check-ignore answered neither ignored nor tracked (%d):\n%s", code, out)
+	}
+
+	// The control. Without it a run where check-ignore matched nothing for a
+	// reason of its own — the wrong directory, a .gitignore that was never
+	// written — reads as every emitted file being tracked, which is the shape of
+	// a test that passes whatever the code does.
+	if out, code := git("check-ignore", "--", ".claude/settings.local.json"); code != 0 {
+		t.Errorf("the per-clone sibling is not ignored (%d), so the check above proves nothing:\n%s", code, out)
+	}
+}
+
 // The build workflow is written to CLAUDE.md so agents discover it. It appends
 // rather than replaces, because an adopter's CLAUDE.md is theirs.
 func TestEnsureBuildDocAppendsAndIsIdempotent(t *testing.T) {
