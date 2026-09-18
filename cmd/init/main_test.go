@@ -241,9 +241,10 @@ func TestSubstituteBackticks(t *testing.T) {
 // is checked, so the next constant authored with § inherits the check rather
 // than the defect.
 //
-// A section is addressed by its slug now and never by a number (org/normative.md,
-// Sections), so the section signs this still admits are the ones in the hook
-// wiring, which only a maintainer may move — see issue #14.
+// A section is addressed by its slug and never by a number (org/normative.md,
+// Sections), and no emitted body carries a § citation any more: the last two went
+// with the pre-commit hook this scaffolder no longer writes. What is left here is
+// the guard for the next constant authored with §.
 func TestEmittedFilesUseTheSectionSignOnlyForBackticks(t *testing.T) {
 	for _, f := range files() {
 		for _, line := range strings.Split(f.body, "\n") {

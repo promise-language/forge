@@ -1449,7 +1449,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -1743,25 +1742,6 @@ func unitSuffix(unit string) string {
 // root. Not configurable: the names are fixed, so the way to reach them is.
 func GateBinary(repoRoot string) string {
 	return filepath.Join(repoRoot, "bin", primitives.BinaryName("gate"))
-}
-
-// CappedMetrics lists the metrics this layer judges, for usage text. If the
-// manifest cannot be loaded (empty repoRoot), it returns an empty list — this is
-// usage text only, not a judging path.
-func CappedMetrics(repoRoot string) []string {
-	if repoRoot == "" {
-		return nil
-	}
-	manifest, err := loadManifest(repoRoot)
-	if err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(manifest))
-	for n := range manifest {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
 }
 `
 
@@ -2700,10 +2680,11 @@ Provisioning delivers it. A checkout that has not been provisioned has no
 //
 // The two command strings are EXACT, not a shape. A conformance checker compares
 // them byte-for-byte and reports any difference at error severity, so no wrapper
-// and no conditional may be added here — unlike the pre-commit hook above, which
-// is a script and can branch. That is also why the file is committed: a tracked
-// settings file is what makes the guard live in a fresh clone, before
-// `workspace setup` has ever run there.
+// and no conditional may be added here. This is also the ONE piece of wiring the
+// scaffolder commits: a tracked settings file is what makes the guard live in a
+// fresh clone, before `workspace setup` has ever run there, where the hook that
+// reaches the commit guard is written by that provisioning run instead
+// (docs/blueprint.md, The commit gate hook).
 const settingsJSON = `{
   "hooks": {
     "PostToolUse": [
