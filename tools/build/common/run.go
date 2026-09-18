@@ -35,8 +35,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/promise-language/forge/primitives"
 )
 
 // Direction is the sense in which a measurement is compared to its threshold.
@@ -91,18 +89,18 @@ func loadManifest(repoRoot string) (map[string]Threshold, error) {
 // SDK takes, so a gate that is broken in a way only visible across that
 // boundary (prints to stdout, exits without an envelope, hangs) is broken here
 // too, where a person can see it.
-func RunOneGate(repoRoot, gateBin, name string) error {
+func RunOneGate(repoRoot, gateBin, name string, narrate io.Writer) (Judged, error) {
 	if !KnownGate(repoRoot, name) {
-		return unknownGate(repoRoot, name)
+		return Judged{}, unknownGate(repoRoot, name)
 	}
 
 	cmd := exec.Command(gateBin, name, "--envelope")
 	cmd.Dir = repoRoot
-	// Stderr is the gate's progress, and it goes straight to ours — not into a
-	// buffer we print afterwards. Gates run for minutes, and a gate that is
-	// working and a gate that is wedged produce the same thing (nothing) for
-	// as long as the output is held.
-	cmd.Stderr = os.Stderr
+	// The gate's progress goes straight to the narration — not into a buffer
+	// printed afterwards. Gates run for minutes, and a gate that is working and
+	// a gate that is wedged produce the same thing (nothing) for as long as the
+	// output is held.
+	cmd.Stderr = narrate
 	out, runErr := cmd.Output()
 
 	var env Envelope
@@ -111,22 +109,57 @@ func RunOneGate(repoRoot, gateBin, name string) error {
 		// that is not an envelope, nothing was measured — and either way this
 		// is not a report that the tree is bad.
 		if runErr != nil {
-			return fmt.Errorf("%s did not measure anything: %w", name, runErr)
+			return Judged{}, fmt.Errorf("%s did not measure anything: %w", name, runErr)
 		}
-		return fmt.Errorf("%s printed something that is not an envelope: %s",
+		return Judged{}, fmt.Errorf("%s printed something that is not an envelope: %s",
 			name, firstLine(string(out)))
 	}
 
 	manifest, err := loadManifest(repoRoot)
 	if err != nil {
+		return Judged{}, err
+	}
+	acceptable, thresholds, detail := judge(env, manifest)
+	return Judged{
+		Envelope: env,
+		Verdict:  Verdict{Acceptable: acceptable, Thresholds: thresholds, Detail: detail},
+		rendered: renderVerdict(env, manifest),
+	}, nil
+}
+
+// Judged is a measurement and the verdict reached on it: what `run <gate>`
+// answers (docs/project-tools.md, Run). The verdict travels with the terms it
+// was reached from, so a reader who was not there can re-check it.
+type Judged struct {
+	Envelope Envelope `json:"envelope"`
+	Verdict  Verdict  `json:"verdict"`
+
+	// rendered is the human form: each measurement beside every term it was
+	// judged on, which is what someone iterating on one failure is reading.
+	rendered string
+}
+
+// Human writes each measurement beside the term it was judged on.
+func (j Judged) Human(w io.Writer) error {
+	if _, err := io.WriteString(w, j.rendered); err != nil {
 		return err
 	}
-	fmt.Print(renderVerdict(env, manifest))
-	acceptable, _, detail := judge(env, manifest)
-	if !acceptable {
-		return fmt.Errorf("%s: %s", name, detail)
+	if j.Verdict.Acceptable || j.Verdict.Detail == "" {
+		return nil
 	}
-	return nil
+	_, err := fmt.Fprintf(w, "%s\n", j.Verdict.Detail)
+	return err
+}
+
+// ExitStatus is 0 when every capped measurement is within its cap and 1 when
+// one is not. The verdict is the JSON, not the status — but a person running
+// one gate reads the status, and a measurement over its cap is a condition they
+// must clear.
+func (j Judged) ExitStatus() int {
+	if j.Verdict.Acceptable {
+		return 0
+	}
+	return 1
 }
 
 // judge compares one envelope against the caps and reaches the verdict.
@@ -188,79 +221,52 @@ func judge(env Envelope, manifest map[string]Threshold) (acceptable bool, thresh
 // Nothing reaches out on any error path. A caller reads one object or none —
 // a half-written verdict beside an error message is a second channel, and the
 // two could disagree.
-func JudgeStdin(repoRoot, name string, in io.Reader, out io.Writer) error {
+func JudgeStdin(repoRoot, name string, in io.Reader) (Verdict, error) {
 	if !KnownGate(repoRoot, name) {
-		return unknownGate(repoRoot, name)
+		return Verdict{}, unknownGate(repoRoot, name)
 	}
 	envelope, err := io.ReadAll(in)
 	if err != nil {
-		return fmt.Errorf("reading the envelope to judge: %w", err)
+		return Verdict{}, fmt.Errorf("reading the envelope to judge: %w", err)
 	}
 	var env Envelope
 	if err := json.Unmarshal(envelope, &env); err != nil {
-		return fmt.Errorf("what arrived on stdin is not an envelope: %w", err)
+		return Verdict{}, fmt.Errorf("what arrived on stdin is not an envelope: %w", err)
 	}
 	// The judge's check, and not the SDK's: only this layer knows which gate
 	// the terms it is about to apply belong to. Judging one gate's numbers
 	// against another's caps would answer a question nobody asked.
 	if env.Gate != name {
-		return fmt.Errorf("asked to judge %q against the terms for %q; a measurement is judged against its own gate's caps", env.Gate, name)
+		return Verdict{}, fmt.Errorf("asked to judge %q against the terms for %q; a measurement is judged against its own gate's caps", env.Gate, name)
 	}
 	manifest, err := loadManifest(repoRoot)
 	if err != nil {
-		return err
+		return Verdict{}, err
 	}
 	acceptable, thresholds, detail := judge(env, manifest)
-	// Marshalled whole before anything is written, so a failure here leaves
-	// stdout untouched rather than half a verdict.
-	body, err := json.Marshal(verdictWire{Acceptable: acceptable, Thresholds: thresholds, Detail: detail})
-	if err != nil {
-		return fmt.Errorf("rendering the verdict for %s: %w", name, err)
-	}
-	_, err = out.Write(append(body, '\n'))
-	return err
+	return Verdict{Acceptable: acceptable, Thresholds: thresholds, Detail: detail}, nil
 }
 
-// verdictWire is what the judging layer prints in --verdict mode: one JSON
-// object, whole.
+// Verdict is what the judging layer answers in --verdict mode: one JSON object,
+// whole. The library writes it — marshalled before anything reaches stdout, so
+// a failure there leaves the stream untouched rather than half a verdict.
 //
 // Thresholds is not omitempty and is never nil. A verdict handed over with the
 // terms it was reached from discarded cannot be re-checked by anyone who was
 // not there, which is exactly the property that lets a judge live in the tree
 // it judges.
-type verdictWire struct {
+type Verdict struct {
 	Acceptable bool               `json:"acceptable"`
 	Thresholds map[string]float64 `json:"thresholds"`
 	Detail     string             `json:"detail,omitempty"`
 }
 
-// ParseRunArgs reads an invocation of this program: exactly one gate name, and
-// whether the caller asked for a verdict on an envelope it is handing over.
-//
-// Same rules as ParseGateArgs, and for the same reason — an unknown flag is
-// refused rather than ignored, and a second name refused rather than dropped.
-// A caller that meant --verdict and mistyped it must not silently get the
-// measuring mode, which spawns a gate.
-func ParseRunArgs(repoRoot string, args []string) (name string, verdict bool, err error) {
-	for _, a := range primitives.NormalizeArgs(args) {
-		switch {
-		case a == "-verdict":
-			verdict = true
-		case strings.HasPrefix(a, "-"):
-			return "", false, fmt.Errorf("use of unknown flag %q", a)
-		case name != "":
-			return "", false, fmt.Errorf("unexpected argument %q; one gate at a time", a)
-		default:
-			name = a
-		}
-	}
-	if name == "" {
-		return "", false, fmt.Errorf("no gate named; known gates: %s", strings.Join(GateNames(repoRoot), ", "))
-	}
-	if !KnownGate(repoRoot, name) {
-		return "", false, unknownGate(repoRoot, name)
-	}
-	return name, verdict, nil
+// Human is not reached: --verdict's stdout belongs to the gate contract, so the
+// command has one mode and the library never asks for a rendering. Saying so
+// loudly is what keeps a future caller from inventing a second shape for a
+// wire another document owns.
+func (v Verdict) Human(io.Writer) error {
+	return fmt.Errorf("a verdict's shape is gate-contract.md's, and it has no rendering for a person")
 }
 
 // renderVerdict prints each measurement beside the term it was judged on.

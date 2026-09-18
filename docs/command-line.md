@@ -238,9 +238,12 @@ that pipes uniformly gets wrong.
 - **The human mode is `<project> <text>`.**
 - **A build that recorded no version says so**, and never reports a version of the empty string.
 
-**`-help` and `-version` answer before anything else a tool does**, including
-[the refusal](#exit-status-and-refusal). Both describe the binary rather than act on the tree, and
-a stale binary's version is exactly the fact needed to diagnose it.
+**A binary that is not fit to act answers neither**, which is the guide's
+[exit codes](org/cli-guide.md#exit-codes): what a stale binary would print is the surface it was
+built with, in the one place an operator goes to learn what a tool is.
+[The refusal](#exit-status-and-refusal) therefore comes first, before the command line is read at
+all, and the builder that refusal names keeps answering — it is never stale, so its help is never
+the stale surface the rule is about.
 
 ## Output
 

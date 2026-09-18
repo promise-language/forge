@@ -21,6 +21,7 @@ package common
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,15 +65,15 @@ func clearVerifiedTree(repoRoot string) error {
 // Outside a git checkout, recording is a reported no-op rather than a verify
 // failure: there is no commit to gate there, and the guard still refuses on
 // the absent record.
-func recordVerifiedTree(repoRoot string) error {
+func recordVerifiedTree(repoRoot string, narrate io.Writer) (string, error) {
 	if _, err := gitWithIndex(repoRoot, "", "rev-parse", "--git-dir"); err != nil {
-		fmt.Println("    not a git checkout — no verified-tree record to write")
-		return nil
+		fmt.Fprintln(narrate, "    not a git checkout — no verified-tree record to write")
+		return "", nil
 	}
 
 	tmpDir, err := os.MkdirTemp("", "verified-tree-")
 	if err != nil {
-		return fmt.Errorf("creating temp index dir: %w", err)
+		return "", fmt.Errorf("creating temp index dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 	index := filepath.Join(tmpDir, "index")
@@ -81,52 +82,52 @@ func recordVerifiedTree(repoRoot string) error {
 	// index file yet, and an empty seed is exactly its tracked set.
 	realIndex, err := gitWithIndex(repoRoot, "", "rev-parse", "--git-path", "index")
 	if err != nil {
-		return fmt.Errorf("locating the index: %w", err)
+		return "", fmt.Errorf("locating the index: %w", err)
 	}
 	if !filepath.IsAbs(realIndex) {
 		realIndex = filepath.Join(repoRoot, realIndex)
 	}
 	if data, err := os.ReadFile(realIndex); err == nil {
 		if err := os.WriteFile(index, data, 0o600); err != nil {
-			return fmt.Errorf("seeding temp index: %w", err)
+			return "", fmt.Errorf("seeding temp index: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("seeding temp index: %w", err)
+		return "", fmt.Errorf("seeding temp index: %w", err)
 	}
 	if _, err := gitWithIndex(repoRoot, index, "add", "-A"); err != nil {
-		return fmt.Errorf("staging into temp index: %w", err)
+		return "", fmt.Errorf("staging into temp index: %w", err)
 	}
 	tree, err := gitWithIndex(repoRoot, index, "write-tree")
 	if err != nil {
-		return fmt.Errorf("computing verified tree: %w", err)
+		return "", fmt.Errorf("computing verified tree: %w", err)
 	}
 
 	record := recordPath(repoRoot)
 	dir := filepath.Dir(record)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", dir, err)
+		return "", fmt.Errorf("creating %s: %w", dir, err)
 	}
 	// Atomic: temp file + rename, so no reader ever sees a half-written record.
 	// The temp file is made in the record's own directory, since a rename is
 	// only atomic within one filesystem.
 	tmp, err := os.CreateTemp(dir, ".verified-tree-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tmp.WriteString(tree + "\n"); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
-		return err
+		return "", err
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
-		return err
+		return "", err
 	}
 	if err := os.Rename(tmp.Name(), record); err != nil {
 		os.Remove(tmp.Name())
-		return err
+		return "", err
 	}
-	return nil
+	return tree, nil
 }
 
 // gitWithIndex runs git in dir, with GIT_INDEX_FILE pointed at indexFile when

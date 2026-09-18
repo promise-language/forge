@@ -3,6 +3,11 @@
 // absolute repo root via -ldflags. It is the one tool that runs via 'go run'
 // (from the ./make trampoline), so it is never compiled into bin/ and never
 // stale — which is what breaks the bootstrap cycle.
+//
+// It is also the recovery every refusal names, which is why it declares no Fit:
+// a tool that refused because the binaries are stale points at this one, and a
+// builder that could refuse on the same ground would close the way out
+// (docs/project-tools.md, Staleness).
 package main
 
 import (
@@ -10,80 +15,118 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 	"github.com/promise-language/forge/tools/build/common"
 )
 
-const usage = `make — the meta-builder.
+// result is what make answers: whether it had anything to do, and what it did.
+type result struct {
+	UpToDate bool     `json:"up_to_date"`
+	Built    []string `json:"built"`
+	Removed  []string `json:"removed"`
+}
 
-Usage:
-  ./make [-force] [-help]
-
-Compiles every tool under tools/build/cmd into bin/ (stamping each with the
-tools-source hash and repo root) and wires git hooks. Skips the build when
-bin/ is already up to date; -force rebuilds regardless.`
-
-func main() {
-	primitives.MaybeHelp(os.Args[1:], usage)
-	force := false
-	for _, a := range os.Args[1:] {
-		if a == "-force" || a == "--force" {
-			force = true
+// Human is the line, or the lines, a person reads.
+func (r result) Human(w io.Writer) error {
+	if r.UpToDate {
+		_, err := fmt.Fprintln(w, "Tools up to date")
+		return err
+	}
+	for _, name := range r.Built {
+		if _, err := fmt.Fprintf(w, "built    %s\n", name); err != nil {
+			return err
 		}
 	}
+	for _, name := range r.Removed {
+		if _, err := fmt.Fprintf(w, "removed  %s\n", name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+// define is make's whole surface. It carries no version: it is the one main
+// without a stamp, because it runs from the source it builds
+// (docs/project-tools.md, One implementation).
+func define() command.Tool {
+	return command.Tool{
+		Project: "make",
+		Root: command.Command{
+			Name:    "make",
+			Summary: "compile every tool under tools/build/cmd into bin/",
+			Flags: []command.Flag{{
+				Name:        "force",
+				Type:        command.Boolean,
+				Description: "compile every tool even where bin/ is already up to date",
+			}},
+			Action: build,
+		},
+	}
+}
+
+// build is the meta-builder's whole run.
+func build(c *command.Call) (command.Result, error) {
 	// 1. Resolve the repo root. The ./make trampoline cd'd go run into
 	//    <root>/tools/build, so our cwd is exactly that. Two levels up is root.
 	cwd, err := os.Getwd()
-	must(err)
+	if err != nil {
+		return nil, err
+	}
 	repoRoot := filepath.Dir(filepath.Dir(cwd))
 	if !filepath.IsAbs(repoRoot) {
-		fail("resolved repo root is not absolute: %s", repoRoot)
+		return nil, fmt.Errorf("resolved repo root is not absolute: %s", repoRoot)
 	}
 
 	// 2. Hash the tools source — baked into every binary below.
 	hash, err := common.SourceHash(repoRoot)
-	must(err)
+	if err != nil {
+		return nil, err
+	}
 
 	// 3. Enable git hooks unconditionally (idempotent, fast).
 	if err := primitives.RunSetup(repoRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not configure git hooks: %v\n", err)
+		fmt.Fprintf(c.Narrate, "warning: could not configure git hooks: %v\n", err)
 	}
 
 	// What this project builds, from the one function that answers that —
 	// the same one `bin/run --list` reports from, so the binaries this writes
 	// into bin/ and the commands the project claims cannot drift apart.
 	tools, err := common.CommandNames(repoRoot)
-	must(err)
+	if err != nil {
+		return nil, err
+	}
 
 	binDir := filepath.Join(repoRoot, "bin")
 	hashFile := filepath.Join(binDir, ".tools.hash")
 
 	// 4. Up-to-date short circuit.
-	if !force && upToDate(hashFile, hash, binDir, tools) {
-		fmt.Println("Tools up to date")
-		return
+	if !c.Bool("force") && upToDate(hashFile, hash, binDir, tools) {
+		return result{UpToDate: true, Built: []string{}, Removed: []string{}}, nil
 	}
 
-	must(os.MkdirAll(binDir, 0o755))
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return nil, err
+	}
 
 	// 5. Build each tool, injecting repoRoot and sourceHash via ldflags.
 	ldflags := fmt.Sprintf("-s -w -X main.sourceHash=%s -X main.repoRoot=%s", hash, repoRoot)
 	toolsModDir := filepath.Join(repoRoot, "tools", "build")
 	for _, name := range tools {
 		out := filepath.Join(binDir, primitives.BinaryName(name))
-		fmt.Printf("building %s\n", name)
-		if err := primitives.RunIn(toolsModDir, "go", "build",
+		fmt.Fprintf(c.Narrate, "building %s\n", name)
+		if err := primitives.RunInStreams(toolsModDir, c.Narrate, c.Narrate, "go", "build",
 			"-trimpath",
 			"-ldflags", ldflags,
 			"-o", out,
 			"./cmd/"+name,
 		); err != nil {
-			fail("building %s: %v", name, err)
+			return nil, fmt.Errorf("building %s: %w", name, err)
 		}
 	}
 
@@ -95,15 +138,21 @@ func main() {
 	for _, name := range tools {
 		h, err := fileHash(filepath.Join(binDir, primitives.BinaryName(name)))
 		if err != nil {
-			fail("hashing %s: %v", name, err)
+			return nil, fmt.Errorf("hashing %s: %w", name, err)
 		}
 		sb.WriteString(name)
 		sb.WriteByte(':')
 		sb.WriteString(h)
 		sb.WriteByte('\n')
 	}
-	must(os.WriteFile(hashFile, []byte(sb.String()), 0o644))
-	fmt.Printf("built %d tool(s) into bin/\n", len(tools))
+	if err := os.WriteFile(hashFile, []byte(sb.String()), 0o644); err != nil {
+		return nil, err
+	}
+	return result{Built: tools, Removed: []string{}}, nil
+}
+
+func main() {
+	os.Exit(command.Run(define(), os.Args[1:], command.Stdio()))
 }
 
 func upToDate(hashFile, hash, binDir string, tools []string) bool {
@@ -159,15 +208,4 @@ func fileHash(path string) (string, error) {
 	}
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:]), nil
-}
-
-func must(err error) {
-	if err != nil {
-		fail("%v", err)
-	}
-}
-
-func fail(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "make: "+format+"\n", args...)
-	os.Exit(1)
 }

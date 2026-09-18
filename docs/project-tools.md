@@ -332,8 +332,9 @@ is `Tools up to date`, or one line per tool built and removed. Progress goes to 
 ## Staleness
 
 > **Every tool except `make` compares the hash it was stamped with against the hash of its stamped
-> source set.** It does so before reading any argument except `-help` and `-version`. On any
-> mismatch it refuses with the refusal status
+> source set.** It does so before it reads the command line at all, `-help` and `-version`
+> included ([cli-guide.md](org/cli-guide.md#exit-codes)). On any mismatch it refuses with the
+> refusal status
 > ([command-line.md#exit-status-and-refusal](command-line.md#exit-status-and-refusal)).
 
 | The tool finds | Refusal |

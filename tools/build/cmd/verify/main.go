@@ -1,9 +1,15 @@
+// Command verify is the commit gate: it repairs what has one right answer,
+// then measures what remains.
+//
+// It is one call into the command library and the definition below: what it
+// parses, how it reports and what it exits with are not this file's
+// (docs/command-line.md, One implementation).
 package main
 
 import (
 	"os"
 
-	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 	"github.com/promise-language/forge/tools/build/common"
 )
 
@@ -13,21 +19,26 @@ var (
 	sourceHash = ""
 )
 
-const usage = `verify — the commit gate.
-
-Usage:
-  verify [-help]
-
-Runs gofmt, go vet, go build, and go test over the module, printing a
-pass/FAIL summary. Exit 0 ("✅ OK to Commit") means safe to commit; non-zero
-("❌ Verify FAILED") means not.`
+// define is verify's whole surface.
+func define(repoRoot, sourceHash string) command.Tool {
+	return command.Tool{
+		Project: "verify",
+		Version: sourceHash,
+		Fit:     common.Fit("verify", repoRoot, sourceHash),
+		Root: command.Command{
+			Name:    "verify",
+			Summary: "the commit gate: repair what has one right answer, then measure what remains",
+			Action: func(c *command.Call) (command.Result, error) {
+				result, err := common.RunVerify(repoRoot, c.Narrate)
+				if err != nil {
+					return nil, err
+				}
+				return result, nil
+			},
+		},
+	}
+}
 
 func main() {
-	primitives.MaybeHelp(os.Args[1:], usage)
-	common.CheckStale(repoRoot, sourceHash)
-	if err := common.RunVerify(repoRoot, primitives.NormalizeArgs(os.Args[1:])); err != nil {
-		// RunVerify already printed the ❌ banner; exit non-zero silently so it
-		// stays the last line of output.
-		os.Exit(1)
-	}
+	os.Exit(command.Run(define(repoRoot, sourceHash), os.Args[1:], command.Stdio()))
 }

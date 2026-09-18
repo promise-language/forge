@@ -1,6 +1,7 @@
 package common
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,7 +45,7 @@ func TestCheckFormatted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "ok.go"), []byte("package a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkFormatted(root); err != nil {
+	if err := checkFormatted(root, io.Discard); err != nil {
 		t.Errorf("a formatted tree was reported unformatted: %v", err)
 	}
 
@@ -52,7 +53,7 @@ func TestCheckFormatted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "ugly.go"), []byte(ugly), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkFormatted(root); err == nil {
+	if err := checkFormatted(root, io.Discard); err == nil {
 		t.Error("an unformatted tree passed")
 	}
 	if after, _ := os.ReadFile(filepath.Join(root, "ugly.go")); string(after) != ugly {
@@ -71,7 +72,7 @@ func TestVerifiedTreeRecordAndClear(t *testing.T) {
 	if err := clearVerifiedTree(root); err != nil {
 		t.Errorf("clearing an absent record is not an error: %v", err)
 	}
-	if err := recordVerifiedTree(root); err != nil {
+	if _, err := recordVerifiedTree(root, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	rec := recordPath(root)
@@ -88,7 +89,7 @@ func TestVerifiedTreeRecordAndClear(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordVerifiedTree(root); err != nil {
+	if _, err := recordVerifiedTree(root, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	body2, _ := os.ReadFile(rec)
@@ -107,8 +108,12 @@ func TestVerifiedTreeRecordAndClear(t *testing.T) {
 // Outside a git checkout there is no commit to gate, so recording is a reported
 // no-op rather than a failure.
 func TestRecordVerifiedTreeOutsideACheckout(t *testing.T) {
-	if err := recordVerifiedTree(t.TempDir()); err != nil {
+	tree, err := recordVerifiedTree(t.TempDir(), io.Discard)
+	if err != nil {
 		t.Errorf("recording outside a checkout failed: %v", err)
+	}
+	if tree != "" {
+		t.Errorf("recorded %q outside a checkout, want no tree at all", tree)
 	}
 }
 
@@ -133,7 +138,7 @@ func TestRunAllModulesReportsAFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bad.go"), []byte("package x\n\nfunc F() int { return \"no\" }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runAllModules(root, "build"); err == nil {
+	if err := runAllModules(root, io.Discard, "build"); err == nil {
 		t.Error("a module that does not build reported success")
 	}
 }

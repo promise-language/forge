@@ -1,6 +1,7 @@
 package primitives
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -8,10 +9,21 @@ import (
 
 // RunIn runs name+args in dir with stdout/stderr/stdin attached to the parent.
 func RunIn(dir, name string, args ...string) error {
+	return RunInStreams(dir, os.Stdout, os.Stderr, name, args...)
+}
+
+// RunInStreams runs name+args in dir, writing the child's output where the
+// caller says rather than to the parent's own streams.
+//
+// A tool built on primitives/command has one thing on stdout — its result — so
+// a child whose output is narration is given the narration writer. `go test`
+// reports on stdout, and a tool that let that through would be writing test
+// output into the stream a caller is parsing.
+func RunInStreams(dir string, out, errs io.Writer, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = out
+	cmd.Stderr = errs
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
 }

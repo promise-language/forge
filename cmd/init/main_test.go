@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/promise-language/forge/primitives/command"
 )
 
 func write(t *testing.T, dir, name, body string) {
@@ -884,5 +886,101 @@ func TestScaffoldedDocsAreLinkClean(t *testing.T) {
 	}
 	if !strings.HasPrefix(docsIndexMd, "# ") {
 		t.Errorf("docs/index.md has no title:\n%s", docsIndexMd)
+	}
+}
+
+// A definition defect fails this project's tested gate rather than the first
+// invocation that reaches it (docs/command-line.md, What a tool decides).
+func TestTheDefinitionPassesTheLibrarysCheck(t *testing.T) {
+	for _, defect := range command.Check(define()) {
+		t.Errorf("init's definition: %v", defect)
+	}
+}
+
+// The scaffolder answers -help like every other tool, where it used to refuse
+// the flag as unknown input and carry no usage text at all.
+func TestHelpAnswersOnStdout(t *testing.T) {
+	var out, errs strings.Builder
+	status := command.Run(define(), []string{"-help"},
+		command.Streams{Out: &out, Err: &errs, OutIsTerminal: true, Dir: t.TempDir()})
+
+	if status != command.StatusDone {
+		t.Errorf("status %d, want 0 (%q)", status, errs.String())
+	}
+	for _, want := range []string{"-force", "target", "path"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("help %q does not describe %q", out.String(), want)
+		}
+	}
+}
+
+// WHERE IT SCAFFOLDS IS WHERE IT WAS INVOKED, never where the binary lives
+// (docs/command-line.md, Types). The target used to be a bare string this file
+// resolved against the process's own working directory; it is now an optional
+// path parameter the library resolves against the invocation's, and the
+// fallback when nobody typed one is this file's. Both branches write a tree
+// into a directory, so getting either wrong is a scaffold that lands somewhere
+// the person never named.
+func TestTheTargetIsWhereItWasInvokedOrWhereItWasTold(t *testing.T) {
+	invokedFrom := t.TempDir()
+
+	answer := scaffoldThroughTheLibrary(t, nil, invokedFrom)
+	if answer.Target != invokedFrom {
+		t.Errorf("with no target it scaffolded into %q, want the directory it was invoked from", answer.Target)
+	}
+	if !exists(filepath.Join(invokedFrom, "make")) {
+		t.Error("nothing was written where it said it wrote")
+	}
+
+	// And a relative target means what it would mean to any other program run
+	// from the same directory.
+	answer = scaffoldThroughTheLibrary(t, []string{"nested"}, invokedFrom)
+	nested := filepath.Join(invokedFrom, "nested")
+	if answer.Target != nested {
+		t.Errorf("`init nested` scaffolded into %q, want %q", answer.Target, nested)
+	}
+	if !exists(filepath.Join(nested, "tools", "build", "go.mod")) {
+		t.Error("the relative target was resolved somewhere else")
+	}
+	// Every path it reports is one it acted on, so the report is an account of
+	// what happened rather than a list of intentions.
+	for _, f := range answer.Files {
+		if f.Action == actionCreate && !exists(filepath.Join(nested, filepath.FromSlash(f.Path))) {
+			t.Errorf("it reports creating %q, which is not there", f.Path)
+		}
+	}
+}
+
+// scaffoldThroughTheLibrary runs init the way a person does and returns what
+// it reported.
+func scaffoldThroughTheLibrary(t *testing.T, args []string, invokedFrom string) result {
+	t.Helper()
+	var out, errs strings.Builder
+	status := command.Run(define(), args, command.Streams{Out: &out, Err: &errs, Dir: invokedFrom})
+	if status != command.StatusDone {
+		t.Fatalf("status %d (%q)", status, errs.String())
+	}
+	var answer result
+	if err := json.Unmarshal([]byte(out.String()), &answer); err != nil {
+		t.Fatalf("stdout %q is not init's result: %v", out.String(), err)
+	}
+	return answer
+}
+
+// A misspelled flag is refused, and nothing is scaffolded.
+func TestAnUnknownFlagScaffoldsNothing(t *testing.T) {
+	target := t.TempDir()
+	var out, errs strings.Builder
+	status := command.Run(define(), []string{"--fore", target},
+		command.Streams{Out: &out, Err: &errs, Dir: t.TempDir()})
+
+	if status != command.StatusMalformed {
+		t.Errorf("status %d, want %d", status, command.StatusMalformed)
+	}
+	if !strings.Contains(errs.String(), "did you mean -force") {
+		t.Errorf("stderr %q, want the nearest name", errs.String())
+	}
+	if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
+		t.Errorf("the target holds %v, want nothing written", entries)
 	}
 }

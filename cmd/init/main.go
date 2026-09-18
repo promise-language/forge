@@ -34,9 +34,12 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/promise-language/forge/primitives/command"
 )
 
 type file struct {
@@ -45,56 +48,132 @@ type file struct {
 	exec bool   // chmod +x after writing
 }
 
-func main() {
-	target := "."
-	force := false
-	for _, a := range os.Args[1:] {
-		switch {
-		case a == "-force" || a == "--force":
-			force = true
-		case strings.HasPrefix(a, "-"):
-			fail("unknown flag: %s", a)
-		default:
-			target = a
-		}
-	}
+// result is what init answers: where it scaffolded, the tools module it chose,
+// and what became of every file it laid down.
+type result struct {
+	Target string    `json:"target"`
+	Module string    `json:"module"`
+	Files  []written `json:"files"`
 
-	absTarget, err := filepath.Abs(target)
-	must(err)
+	// notGit records that the target is not a git checkout yet, which changes
+	// what a person has to do next and nothing about what was written.
+	notGit bool
+}
+
+// written is one path and what init did with it.
+type written struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// The three things init does to a path.
+const (
+	actionCreate = "create"
+	actionUpdate = "update"
+	actionSkip   = "skip"
+)
+
+// Human is the scaffolder's report, and then what to do next — which is the
+// whole reason a person runs this by hand.
+func (r result) Human(w io.Writer) error {
+	var b strings.Builder
+	for _, f := range r.Files {
+		fmt.Fprintf(&b, "  %-6s %s", f.Action, f.Path)
+		if f.Detail != "" {
+			fmt.Fprintf(&b, " (%s)", f.Detail)
+		}
+		b.WriteByte('\n')
+	}
+	if r.notGit {
+		b.WriteString("\nnote: this is not a git repository yet.\n")
+		b.WriteString("      run 'git init' so ./make can wire up the pre-commit hook.\n")
+	}
+	b.WriteString(`
+Done. Next steps:
+  ./make        # compiles bin/{verify,setup,gate,run}
+  bin/verify    # runs the commit gate
+  bin/gate --list   # the measurements this project answers
+  bin/run fit       # measure one gate and judge what it measured
+
+Two tools the committed hooks name are NOT built here: bin/precommit-guard
+and bin/tool-guard belong to the workspace that manages a project, and
+'workspace setup' installs them. Until then .githooks/pre-commit names
+bin/verify as this project's gate, and commits are not blocked.
+
+Then edit tools/build/common/verify.go to run your project's real
+format / build / test commands, tools/build/common/gate.go for what this
+project measures, and tools/gates/thresholds.json for the caps a verdict
+rests on. Drop a new dir under tools/build/cmd/ and re-run ./make to get
+another bin/<tool> — no registration needed.
+
+The build workflow is written to CLAUDE.md so agents discover it.
+`)
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// define is init's whole surface. It carries no version — it is run as
+// `go run github.com/promise-language/forge/cmd/init@latest`, and the build
+// records none — and no Fit: it is not a stamped tool, so there is no source it
+// could have fallen behind.
+func define() command.Tool {
+	return command.Tool{
+		Project: "init",
+		Root: command.Command{
+			Name:    "init",
+			Summary: "scaffold the forge dev-tooling layout into a repository",
+			Flags: []command.Flag{{
+				Name:        "force",
+				Type:        command.Boolean,
+				Description: "overwrite a file that is already there",
+			}},
+			Params: []command.Param{{
+				Name:        "target",
+				Type:        command.Path,
+				Arity:       command.Optional,
+				Description: "the repository to scaffold into (default: the working directory)",
+			}},
+			Action: writeLayout,
+		},
+	}
+}
+
+// writeLayout lays the layout down and reports what it did.
+func writeLayout(c *command.Call) (command.Result, error) {
+	absTarget := c.Arg("target")
+	if absTarget == "" {
+		absTarget = c.Dir
+	}
 	mod := toolsModule(absTarget)
 
-	fmt.Printf("forge/init: scaffolding into %s\n", absTarget)
-	fmt.Printf("forge/init: tools module = %s\n\n", mod)
+	fmt.Fprintf(c.Narrate, "forge/init: scaffolding into %s\n", absTarget)
+	fmt.Fprintf(c.Narrate, "forge/init: tools module = %s\n", mod)
 
+	answer := result{Target: absTarget, Module: mod, notGit: !exists(filepath.Join(absTarget, ".git"))}
 	for _, f := range files() {
-		writeFile(absTarget, f, mod, force)
+		done, err := writeFile(absTarget, f, mod, c.Bool("force"))
+		if err != nil {
+			return nil, err
+		}
+		answer.Files = append(answer.Files, done)
 	}
-	ensureGitignore(absTarget)
-	ensureBuildDoc(absTarget)
-
-	if !exists(filepath.Join(absTarget, ".git")) {
-		fmt.Println("\nnote: this is not a git repository yet.")
-		fmt.Println("      run 'git init' so ./make can wire up the pre-commit hook.")
+	ignored, err := ensureGitignore(absTarget)
+	if err != nil {
+		return nil, err
 	}
+	answer.Files = append(answer.Files, ignored)
 
-	fmt.Println("\nDone. Next steps:")
-	fmt.Println("  ./make        # compiles bin/{verify,setup,gate,run}")
-	fmt.Println("  bin/verify    # runs the commit gate")
-	fmt.Println("  bin/gate --list   # the measurements this project answers")
-	fmt.Println("  bin/run fit       # measure one gate and judge what it measured")
-	fmt.Println()
-	fmt.Println("Two tools the committed hooks name are NOT built here: bin/precommit-guard")
-	fmt.Println("and bin/tool-guard belong to the workspace that manages a project, and")
-	fmt.Println("'workspace setup' installs them. Until then .githooks/pre-commit names")
-	fmt.Println("bin/verify as this project's gate, and commits are not blocked.")
-	fmt.Println()
-	fmt.Println("Then edit tools/build/common/verify.go to run your project's real")
-	fmt.Println("format / build / test commands, tools/build/common/gate.go for what this")
-	fmt.Println("project measures, and tools/gates/thresholds.json for the caps a verdict")
-	fmt.Println("rests on. Drop a new dir under tools/build/cmd/ and re-run ./make to get")
-	fmt.Println("another bin/<tool> — no registration needed.")
-	fmt.Println()
-	fmt.Println("The build workflow is written to CLAUDE.md so agents discover it.")
+	documented, err := ensureBuildDoc(absTarget)
+	if err != nil {
+		return nil, err
+	}
+	answer.Files = append(answer.Files, documented)
+	return answer, nil
+}
+
+func main() {
+	os.Exit(command.Run(define(), os.Args[1:], command.Stdio()))
 }
 
 // toolsModule picks the import path for the island tools module. If the target
@@ -125,19 +204,24 @@ func rootModulePath(absTarget string) string {
 	return ""
 }
 
-func writeFile(absTarget string, f file, mod string, force bool) {
+func writeFile(absTarget string, f file, mod string, force bool) (written, error) {
 	dst := filepath.Join(absTarget, f.path)
 	if exists(dst) && !force {
-		fmt.Printf("  skip   %s (exists)\n", f.path)
-		return
+		return written{Path: f.path, Action: actionSkip, Detail: "exists"}, nil
 	}
-	must(os.MkdirAll(filepath.Dir(dst), 0o755))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return written{}, err
+	}
 	body := strings.ReplaceAll(f.body, "__MODULE__", mod)
-	must(os.WriteFile(dst, []byte(body), 0o644))
-	if f.exec {
-		must(os.Chmod(dst, 0o755))
+	if err := os.WriteFile(dst, []byte(body), 0o644); err != nil {
+		return written{}, err
 	}
-	fmt.Printf("  create %s\n", f.path)
+	if f.exec {
+		if err := os.Chmod(dst, 0o755); err != nil {
+			return written{}, err
+		}
+	}
+	return written{Path: f.path, Action: actionCreate}, nil
 }
 
 // perClonePaths is every path this layout writes that is per-clone and
@@ -162,22 +246,24 @@ var perClonePaths = []string{
 // ensureGitignore adds the per-clone paths the file does not already carry, and
 // nothing else. An adopter's .gitignore is theirs: what is present is left
 // exactly as written, including the spelling.
-func ensureGitignore(absTarget string) {
+func ensureGitignore(absTarget string) (written, error) {
 	path := filepath.Join(absTarget, ".gitignore")
 	existing, _ := os.ReadFile(path)
 	missing := missingIgnoreRules(string(existing))
 	if len(missing) == 0 {
-		fmt.Println("  skip   .gitignore (every per-clone path is already ignored)")
-		return
+		return written{Path: ".gitignore", Action: actionSkip, Detail: "every per-clone path is already ignored"}, nil
 	}
 	block := "\n# forge dev tooling — written per clone, never committed\n" +
 		strings.Join(missing, "\n") + "\n"
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	must(err)
+	if err != nil {
+		return written{}, err
+	}
 	defer f.Close()
-	_, err = f.WriteString(block)
-	must(err)
-	fmt.Printf("  update .gitignore (+%s)\n", strings.Join(missing, ", "))
+	if _, err := f.WriteString(block); err != nil {
+		return written{}, err
+	}
+	return written{Path: ".gitignore", Action: actionUpdate, Detail: "+" + strings.Join(missing, ", ")}, nil
 }
 
 // missingIgnoreRules returns the per-clone paths the existing .gitignore does
@@ -213,39 +299,30 @@ func missingIgnoreRules(existing string) []string {
 // appends a "Dev tooling" section to CLAUDE.md (the file Claude Code auto-loads
 // into context), creating the file if absent. Idempotent via a marker comment,
 // and append-rather-than-overwrite so it coexists with an existing CLAUDE.md.
-func ensureBuildDoc(absTarget string) {
+func ensureBuildDoc(absTarget string) (written, error) {
 	path := filepath.Join(absTarget, "CLAUDE.md")
 	existing, _ := os.ReadFile(path)
 	if strings.Contains(string(existing), buildDocMarker) {
-		fmt.Println("  skip   CLAUDE.md (dev tooling section already present)")
-		return
+		return written{Path: "CLAUDE.md", Action: actionSkip, Detail: "dev tooling section already present"}, nil
 	}
 	body := buildDocBlock
-	verb := "create"
+	action := actionCreate
 	if len(existing) > 0 {
 		body = "\n" + body // separate from prior content
-		verb = "update"
+		action = actionUpdate
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	must(err)
+	if err != nil {
+		return written{}, err
+	}
 	defer f.Close()
-	_, err = f.WriteString(body)
-	must(err)
-	fmt.Printf("  %s CLAUDE.md (dev tooling section)\n", verb)
+	if _, err := f.WriteString(body); err != nil {
+		return written{}, err
+	}
+	return written{Path: "CLAUDE.md", Action: action, Detail: "dev tooling section"}, nil
 }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
-
-func must(err error) {
-	if err != nil {
-		fail("%v", err)
-	}
-}
-
-func fail(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "forge/init: "+format+"\n", args...)
-	os.Exit(1)
-}
 
 func files() []file {
 	return []file{

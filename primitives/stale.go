@@ -2,34 +2,57 @@ package primitives
 
 import (
 	"fmt"
-	"os"
+
+	"github.com/promise-language/forge/primitives/command"
 )
 
-// StaleReason returns a human-readable reason this binary is out of sync with
-// its tools source, or "" if it is current. repoRoot and compiledHash are
-// injected via -ldflags; empty values mean the binary was built some other way
-// (go install, manual go build). It never exits — callers decide whether
-// staleness is fatal (pipeline tools that would otherwise produce misleading
-// results) or merely a warning (the git hook, which must never block a commit).
+// StaleRefusal reports why this binary may not act, or nil when it may.
+//
+// repoRoot and compiledHash are injected via -ldflags; empty values mean the
+// binary was built some other way (go install, manual go build). It never
+// exits and never writes: the condition is decided here, and what a refusal
+// does with it — its status, its object, and which stream each goes to — is
+// the command library's (docs/command-line.md, Exit status and refusal).
+//
+// The condition is typed rather than prose, because a caller must be able to
+// tell a stale toolchain from a failing tree without matching a sentence: a
+// tool that exits over a stale build has measured nothing, and a caller that
+// reports that as the tree's failure has named a repair that is not the repair
+// (docs/org/cli-guide.md, Exit codes).
 //
 // dirs names the tool source, and naming none means tools/build — see
 // SourceHash. A caller that names them must name the same set the meta-builder
 // hashed, or every binary reports itself stale forever.
-func StaleReason(repoRoot, compiledHash string, dirs ...string) string {
+func StaleRefusal(tool, repoRoot, compiledHash string, dirs ...string) *command.Refusal {
 	if repoRoot == "" || compiledHash == "" {
-		return "this binary was not built via ./make"
+		return &command.Refusal{
+			Refusal:  command.Unstamped,
+			Tool:     tool,
+			Detail:   fmt.Sprintf("this binary carries no stamp, so it was not built by %s", MakeCmd()),
+			Recovery: Recovery(),
+		}
 	}
 	currentHash, err := SourceHash(repoRoot, dirs...)
 	if err != nil {
-		return fmt.Sprintf("binary's repo (%s) is unreachable: %v", repoRoot, err)
+		return &command.Refusal{
+			Refusal:  command.RepositoryUnreachable,
+			Tool:     tool,
+			Detail:   fmt.Sprintf("the repository this binary was built in (%s) is unreachable: %v", repoRoot, err),
+			Recovery: Recovery(),
+		}
 	}
 	if compiledHash != currentHash {
-		return "tools source has changed since this binary was built"
+		return &command.Refusal{
+			Refusal:  command.Stale,
+			Tool:     tool,
+			Detail:   "the tools source has changed since this binary was built",
+			Recovery: Recovery(),
+		}
 	}
-	return ""
+	return nil
 }
 
-// MakeCmd is the bootstrap command to print in recovery hints.
+// MakeCmd is the bootstrap command every refusal names.
 func MakeCmd() string {
 	if IsWindows() {
 		return ".\\make.cmd"
@@ -37,26 +60,13 @@ func MakeCmd() string {
 	return "./make"
 }
 
-// CheckStale aborts a tool whose stale logic would otherwise run: pipeline
-// tools (verify, build, test, …) would produce misleading results, and the
-// commit gate (precommit) must never validate a commit with out-of-date logic.
-// It points the caller at ./make.
+// Recovery is the program and arguments that clear a refusal, run from the
+// repository root and exec'd, never interpreted.
 //
-// It is deliberately NOT a one-way door: the recovery, ./make, runs via 'go
-// run' and has no staleness gate of its own, so it always works no matter how
-// stale — or how broken — the compiled binaries are. Editing the tool source to
-// fix a broken build is likewise permitted by the guard. So the way out is
-// always fix-and-rebuild, never committing the broken state. Stale tools are a
-// speed bump (re-run ./make), never a lockout.
-func CheckStale(repoRoot, compiledHash string, dirs ...string) {
-	reason := StaleReason(repoRoot, compiledHash, dirs...)
-	if reason == "" {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "%s — run %s", reason, MakeCmd())
-	if repoRoot != "" {
-		fmt.Fprintf(os.Stderr, " (in %s)", repoRoot)
-	}
-	fmt.Fprintln(os.Stderr)
-	os.Exit(1)
+// It is deliberately NOT a one-way door: the recovery runs via `go run` and has
+// no staleness check of its own, so it always works no matter how stale — or
+// how broken — the compiled binaries are. The way out is always
+// fix-and-rebuild, never committing the broken state.
+func Recovery() []string {
+	return []string{MakeCmd()}
 }

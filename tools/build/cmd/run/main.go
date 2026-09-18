@@ -5,16 +5,18 @@
 // back. Running a single gate is not a lesser case — it is faster than
 // everything that blocks a change from landing, and it is what someone
 // iterating on one failure actually wants.
+//
+// It is one call into the command library and the definition below: what it
+// parses, how it reports and what it exits with are not this file's
+// (docs/command-line.md, One implementation).
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
-	"github.com/promise-language/forge/primitives"
+	"github.com/promise-language/forge/primitives/command"
 	"github.com/promise-language/forge/tools/build/common"
 )
 
@@ -24,80 +26,30 @@ var (
 	sourceHash = ""
 )
 
-func usage() string {
-	var sb strings.Builder
-	sb.WriteString("run — measure one gate and judge what it measured.\n\n")
-	sb.WriteString("Usage:\n  run <gate> [-help]\n  run <gate> --verdict < envelope\n  run --list [-json | -human]\n\n")
-	sb.WriteString("Runs bin/gate <gate> --envelope, then prints each measurement beside the\n")
-	sb.WriteString("term it was judged on. Exit 0 means every capped measurement is within its\n")
-	sb.WriteString("cap; non-zero means one is not, or that nothing could be measured.\n\n")
-	sb.WriteString("With --verdict it judges an envelope it is GIVEN, on stdin, and runs no\n")
-	sb.WriteString("gate: it prints one JSON verdict on stdout and nothing else. That is the\n")
-	sb.WriteString("mode the SDK asks — the SDK spawns the gate, because a judge that ran its\n")
-	sb.WriteString("own measurement would be the runner, and the runner comes from outside the\n")
-	sb.WriteString("tree.\n\n")
-	sb.WriteString("Gates:\n")
-	for _, n := range common.GateConcepts() {
-		fmt.Fprintf(&sb, "  %-12s %s\n", n, common.GateSummary(n))
-	}
-	sb.WriteString("\nA name is a concept, optionally with an instance naming one module:\n")
-	fmt.Fprintf(&sb, "  %s\n", strings.Join(common.ModuleLabels(repoRoot), ", "))
-	sb.WriteString("Omitting the instance measures every module.\n")
-	capped := common.CappedMetrics(repoRoot)
-	if len(capped) > 0 {
-		fmt.Fprintf(&sb, "\nJudged against a cap: %s\n", strings.Join(capped, ", "))
-	} else {
-		fmt.Fprintf(&sb, "\nThresholds defined in %s\n", common.ManifestFile)
-	}
-	sb.WriteString("Anything else is reported and not judged.\n\n")
-	sb.WriteString("With --list it names what this project builds and what it answers:\n")
-	sb.WriteString("`commands` are the binaries in bin/, `gates` are the names bin/gate\n")
-	sb.WriteString("--list declares. That is the discovery query — it is how anything\n")
-	sb.WriteString("outside the tree learns both without holding a copy that can go stale.\n")
-	sb.WriteString("Output is human-readable at a terminal and JSON when stdout is not one;\n")
-	sb.WriteString("-json and -human force the mode, and passing both is a usage error.\n")
-	return sb.String()
-}
-
-// listAnswer is what --list prints: the two kinds of name a caller outside this
+// listing is what --list answers: the two kinds of name a caller outside this
 // tree can ask this project for — a command it can execute, and a gate it can
 // measure. Both are discovered rather than declared, so neither can go stale,
-// and one JSON object carries them together because a caller that must not
-// confuse the two needs to see the whole vocabulary at once.
-type listAnswer struct {
+// and one object carries them together because a caller that must not confuse
+// the two needs to see the whole vocabulary at once.
+//
+// The shape is generic-projects.md's, and `bin/gate --list` renders the same
+// gate names as objects rather than bare names.
+type listing struct {
 	Commands []string `json:"commands"`
 	Gates    []string `json:"gates"`
 }
 
-// wantsList reports whether the argv names the discovery query, so main can
-// route to it before ParseRunArgs refuses `-list` as an unknown gate flag.
-func wantsList(args []string) bool {
-	for _, a := range args {
-		if a == "-list" {
-			return true
-		}
-	}
-	return false
-}
-
-// renderList writes the answer in the mode stdout asked for (cli-guide's Output modes).
-//
-// The human form is one name per line with its kind, because the two lists are
-// answers to different questions — what this project builds, and what it
-// answers — and a reader who cannot tell which is which has to know the
-// vocabulary already to use the output that exists to teach it.
-func renderList(w io.Writer, answer listAnswer, mode common.OutputMode) error {
-	if mode == common.OutputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(answer)
-	}
-	for _, c := range answer.Commands {
+// Human is one name per line with its kind, because the two lists answer
+// different questions — what this project builds, and what it answers — and a
+// reader who cannot tell which is which has to know the vocabulary already to
+// use the output that exists to teach it.
+func (l listing) Human(w io.Writer) error {
+	for _, c := range l.Commands {
 		if _, err := fmt.Fprintf(w, "command  %s\n", c); err != nil {
 			return err
 		}
 	}
-	for _, g := range answer.Gates {
+	for _, g := range l.Gates {
 		if _, err := fmt.Fprintf(w, "gate     %s\n", g); err != nil {
 			return err
 		}
@@ -105,78 +57,82 @@ func renderList(w io.Writer, answer listAnswer, mode common.OutputMode) error {
 	return nil
 }
 
-func main() {
-	args := primitives.NormalizeArgs(os.Args[1:])
-	if primitives.HasHelpFlag(args) {
-		fmt.Print(usage())
-		os.Exit(0)
+// define is run's whole surface: the gates this project answers, each judged or
+// measured, and the discovery query beside them.
+func define(repoRoot, sourceHash string) command.Tool {
+	return command.Tool{
+		Project: "run",
+		Version: sourceHash,
+		Fit:     common.Fit("run", repoRoot, sourceHash),
+		Root: command.Command{
+			Name:    "run",
+			Summary: "measure one gate and judge what it measured",
+			Flags: []command.Flag{{
+				Name:        "list",
+				Type:        command.Boolean,
+				Description: "name what this project builds and what it answers",
+			}},
+			SelectedBy: "list",
+			Action:     func(c *command.Call) (command.Result, error) { return list(repoRoot) },
+
+			Children:     func() []command.Command { return children(repoRoot) },
+			ChildClass:   "<gate>",
+			ChildSummary: "a gate this project answers",
+			EnumeratedBy: "run --list",
+			ChildFlags: []command.Flag{{
+				Name:        "verdict",
+				Type:        command.Boolean,
+				Description: "judge the envelope on stdin, and run no gate",
+				Protocol:    "gate-contract.md",
+			}},
+			ChildAction: func(c *command.Call) (command.Result, error) { return measureOrJudge(repoRoot, c) },
+		},
 	}
-	common.CheckStale(repoRoot, sourceHash)
+}
 
-	// The discovery query. It comes after CheckStale for the reason the verdict
-	// mode does: a binary whose logic has moved since it was compiled must not
-	// answer with names it may no longer implement. It comes before
-	// ParseRunArgs because that refuses an unknown flag rather than ignoring
-	// it, and --list is not a gate name.
-	if wantsList(args) {
-		// Fail closed: every problem with the invocation is reported before anything is
-		// done, and a malformed invocation exits 2 having written nothing.
-		rest, outFlags := common.TakeOutputFlags(args)
-		var bad []string
-		for _, a := range rest {
-			if a != "-list" {
-				bad = append(bad, a)
-			}
-		}
-		var problems []string
-		if len(bad) > 0 {
-			problems = append(problems, fmt.Sprintf("unknown flag(s) alongside --list: %s", strings.Join(bad, ", ")))
-		}
-		mode, err := outFlags.Mode()
-		if err != nil {
-			problems = append(problems, err.Error())
-		}
-		if len(problems) > 0 {
-			for _, p := range problems {
-				fmt.Fprintf(os.Stderr, "run: %s\n", p)
-			}
-			fmt.Fprintf(os.Stderr, "run: see `%s -help` for the supported flags\n", os.Args[0])
-			os.Exit(2)
-		}
-
-		commands, err := common.CommandNames(repoRoot)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "run: cannot say what this project builds: %v\n", err)
-			os.Exit(1)
-		}
-		answer := listAnswer{Commands: commands, Gates: common.GateNames(repoRoot)}
-		if err := renderList(os.Stdout, answer, mode); err != nil {
-			fmt.Fprintf(os.Stderr, "run: %v\n", err)
-			os.Exit(1)
-		}
-		return
+// children is the gate set this project answers.
+func children(repoRoot string) []command.Command {
+	names := common.GateNames(repoRoot)
+	set := make([]command.Command, 0, len(names))
+	for _, n := range names {
+		set = append(set, command.Command{Name: n, Summary: common.GateSummary(n)})
 	}
+	return set
+}
 
-	name, verdict, err := common.ParseRunArgs(repoRoot, args)
+// list says what this project builds and what it answers.
+//
+// It is the discovery query: it is how anything outside the tree learns both
+// without holding a copy that can go stale.
+func list(repoRoot string) (command.Result, error) {
+	commands, err := common.CommandNames(repoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "run: %v; run `%s -help` for usage\n", err, os.Args[0])
-		os.Exit(2)
+		return nil, fmt.Errorf("cannot say what this project builds: %w", err)
 	}
+	return listing{Commands: commands, Gates: common.GateNames(repoRoot)}, nil
+}
 
-	// The judging mode. Nothing is spawned: the envelope arrives on stdin from
-	// whoever ran the gate, and stdout carries one verdict and nothing else.
-	// CheckStale has already run above, so stale tooling exits before it can
-	// print a verdict rather than answering with terms nobody currently holds.
-	if verdict {
-		if err := common.JudgeStdin(repoRoot, name, os.Stdin, os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "run: %v\n", err)
-			os.Exit(1)
+// measureOrJudge runs the gate, or judges an envelope it is handed.
+//
+// In the judging mode nothing is spawned: the envelope arrives on stdin from
+// whoever ran the gate. That is the mode the SDK asks — the SDK spawns the
+// gate, because a judge that ran its own measurement would be the runner, and
+// the runner comes from outside the tree.
+func measureOrJudge(repoRoot string, c *command.Call) (command.Result, error) {
+	if c.Bool("verdict") {
+		verdict, err := common.JudgeStdin(repoRoot, c.Name(), c.In)
+		if err != nil {
+			return nil, err
 		}
-		return
+		return verdict, nil
 	}
+	judged, err := common.RunOneGate(repoRoot, common.GateBinary(repoRoot), c.Name(), c.Narrate)
+	if err != nil {
+		return nil, err
+	}
+	return judged, nil
+}
 
-	if err := common.RunOneGate(repoRoot, common.GateBinary(repoRoot), name); err != nil {
-		fmt.Fprintf(os.Stderr, "run: %v\n", err)
-		os.Exit(1)
-	}
+func main() {
+	os.Exit(command.Run(define(repoRoot, sourceHash), os.Args[1:], command.Stdio()))
 }

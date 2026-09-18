@@ -18,9 +18,6 @@ func TestUnknownGateIsRefusedRatherThanEmpty(t *testing.T) {
 	if _, err := MeasureGate(t.TempDir(), "lint"); err == nil {
 		t.Fatal("MeasureGate accepted a gate this project does not provide")
 	}
-	if _, _, err := ParseGateArgs(t.TempDir(), []string{"lint", "--envelope"}); err == nil {
-		t.Fatal("ParseGateArgs accepted an unknown gate name")
-	}
 }
 
 // Every part of a composition must be individually runnable. That is a
@@ -39,48 +36,6 @@ func TestCompositionPartsAreThemselvesGates(t *testing.T) {
 		if !KnownGate(t.TempDir(), part) {
 			t.Errorf("integration composes %q, which is not a gate anyone can ask for", part)
 		}
-	}
-}
-
-// A gate is asked for one way. Two callers asking the same thing must not be
-// able to get different answers and both be right, so anything that is not
-// "one name, optionally --envelope" is refused rather than interpreted.
-func TestGateInvocationIsOneWay(t *testing.T) {
-	cases := []struct {
-		name     string
-		args     []string
-		wantName string
-		wantEnv  bool
-		wantErr  bool
-	}{
-		{"bare name asks for no envelope", []string{"tested"}, "tested", false, false},
-		{"runner appends the flag", []string{"tested", "--envelope"}, "tested", true, false},
-		{"short spelling is the same flag", []string{"tested", "-envelope"}, "tested", true, false},
-		{"no name at all", []string{"--envelope"}, "", false, true},
-		{"two names", []string{"tested", "builds", "--envelope"}, "", false, true},
-		{"an unknown flag is refused, not ignored", []string{"tested", "--quiet"}, "", false, true},
-		// fit is reached the same way every gate is: nothing about a gate whose
-		// subject is the machine changes how it is asked for, and a bare
-		// `bin/gate fit` is refused an envelope by this same rule.
-		{"the machine gate is asked for like any other", []string{"fit", "--envelope"}, "fit", true, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			name, env, err := ParseGateArgs(t.TempDir(), tc.args)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("ParseGateArgs(%q) = (%q, %v, nil), want an error", tc.args, name, env)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("ParseGateArgs(%q): %v", tc.args, err)
-			}
-			if name != tc.wantName || env != tc.wantEnv {
-				t.Errorf("ParseGateArgs(%q) = (%q, %v), want (%q, %v)",
-					tc.args, name, env, tc.wantName, tc.wantEnv)
-			}
-		})
 	}
 }
 
