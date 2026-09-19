@@ -164,10 +164,20 @@ The order is the guide's One order. The library applies it in three steps.
 two, together with the pointer to `-help`. The list of known names is not printed.
 
 **`-help` is answered where the guide admits a flag**: after the resolved command path, before any
-positional argument. It then answers that command's help and nothing else, exiting 0 even when
-other flags in the invocation are wrong — a person who asked what the command takes is not served
-by a list of their other mistakes. A `-help` written anywhere else is a misplaced flag like any
-other, reported and refused with everything else.
+positional argument. A `-help` written anywhere else is a misplaced flag like any other, reported
+and refused with everything else.
+
+**`-help` and `-version` answer an invocation that carries nothing else**, which is the guide's
+[help and version](org/cli-guide.md#help-and-version). Beside them the library takes `-json` and
+`-human`; every other flag, every positional argument, and the other of the two are usage errors,
+reported in the same one pass as everything else and refused with the same status. A parameter file
+is read as ever — `-json-input` is how the parameters arrived, not one of them — and what it
+supplies is company like anything typed on the line.
+
+**What the invocation leaves out is not a problem.** A required flag and a required argument are
+required of the invocation that runs the command, and one that only asked what the command takes
+does not run it: the parameters it is missing are the answer it came for. The command's validation
+is not called either.
 
 **A contradiction the types cannot see is still found before the action runs.** A command may
 declare a validation, and the library calls it after parsing. Every error it returns is reported in

@@ -18,9 +18,6 @@ type parsed struct {
 	protocol string
 	delegate []string
 	problems []string
-	// modeProblem is the one problem -help and -version do not outrun, because
-	// it is about the very answer they asked for.
-	modeProblem string
 }
 
 // parse applies the guide's One order in three steps: the command path, then
@@ -192,20 +189,17 @@ func parse(root *resolved, args []string, s Streams) *parsed {
 	positionals = kept
 
 	p.applyJSONInput(cur, jsonInput, s, &wantJSON, &wantHuman, &positionals)
-	p.assignParams(cur, positionals, s.Dir)
-	p.requireFlags(cur)
-	p.selectOutput(cur, wantJSON, wantHuman, s.OutIsTerminal)
-
-	// -help and -version are answered where the guide admits a flag, and they
-	// answer that command and nothing else — a person who asked what a command
-	// takes is not served by a list of their other mistakes. A contradiction
-	// about the mode is the one problem they cannot outrun, because it is about
-	// this very answer.
+	// -help and -version answer an invocation that carries nothing else. What
+	// it leaves out is not a problem: the required parameters are required of
+	// the invocation that runs the command, and this one does not run it.
 	if p.help || p.version {
-		p.problems = nil
-		if p.modeProblem != "" {
-			p.problems = []string{p.modeProblem}
-		}
+		p.refuseCompany(cur, positionals)
+	} else {
+		p.assignParams(cur, positionals, s.Dir)
+		p.requireFlags(cur)
+	}
+	p.selectOutput(cur, wantJSON, wantHuman, s.OutIsTerminal)
+	if p.help || p.version {
 		return p
 	}
 
@@ -305,6 +299,40 @@ func (p *parsed) assignParams(cur *resolved, positionals []string, dir string) {
 	}
 }
 
+// refuseCompany reports everything an invocation asking for -help or -version
+// carries besides -json and -human. The operator who typed `tool sync -help
+// origin` may have meant the help and may have meant the command, and guessing
+// is worse than either answer (docs/org/cli-guide.md, Help and version).
+//
+// It reports presence, never correctness: a flag that was unknown, misplaced or
+// given a value of the wrong type is already in the problems from the one pass,
+// so what is left to name here is the company that parsed cleanly.
+func (p *parsed) refuseCompany(cur *resolved, positionals []string) {
+	// Each of the two says what it answers, in the words its own description
+	// uses: -help prints what the command takes, -version what the binary is.
+	asked, answers := "-"+flagHelp, "what the command takes"
+	if p.version {
+		asked, answers = "-"+flagVersion, "what this binary is"
+	}
+	refuse := func(what string) {
+		p.problems = append(p.problems, fmt.Sprintf(
+			"%s is not accepted with %s, which prints %s and does nothing else",
+			what, asked, answers))
+	}
+	if p.help && p.version {
+		p.problems = append(p.problems, fmt.Sprintf(
+			"-%s and -%s ask for two answers: pass one", flagHelp, flagVersion))
+	}
+	for _, f := range cur.flags {
+		if p.call.given[f.Name] {
+			refuse("-" + f.Name)
+		}
+	}
+	for _, extra := range positionals {
+		refuse(fmt.Sprintf("%q", extra))
+	}
+}
+
 // requireFlags reports every required flag the invocation left out.
 func (p *parsed) requireFlags(cur *resolved) {
 	for _, f := range cur.flags {
@@ -336,8 +364,7 @@ func (p *parsed) selectOutput(cur *resolved, wantJSON, wantHuman, outIsTerminal 
 	}
 	mode, err := selectMode(wantJSON, wantHuman, outIsTerminal)
 	if err != nil {
-		p.modeProblem = err.Error()
-		p.problems = append(p.problems, p.modeProblem)
+		p.problems = append(p.problems, err.Error())
 	}
 	p.mode = mode
 }
