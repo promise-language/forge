@@ -308,14 +308,16 @@ func (p *parsed) assignParams(cur *resolved, positionals []string, dir string) {
 // given a value of the wrong type is already in the problems from the one pass,
 // so what is left to name here is the company that parsed cleanly.
 func (p *parsed) refuseCompany(cur *resolved, positionals []string) {
-	asked := "-" + flagHelp
+	// Each of the two says what it answers, in the words its own description
+	// uses: -help prints what the command takes, -version what the binary is.
+	asked, answers := "-"+flagHelp, "what the command takes"
 	if p.version {
-		asked = "-" + flagVersion
+		asked, answers = "-"+flagVersion, "what this binary is"
 	}
 	refuse := func(what string) {
 		p.problems = append(p.problems, fmt.Sprintf(
-			"%s is not accepted with %s, which prints what the command takes and does nothing else",
-			what, asked))
+			"%s is not accepted with %s, which prints %s and does nothing else",
+			what, asked, answers))
 	}
 	if p.help && p.version {
 		p.problems = append(p.problems, fmt.Sprintf(

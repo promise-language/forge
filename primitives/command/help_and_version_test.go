@@ -36,8 +36,9 @@ func TestHelpAndVersion(t *testing.T) {
 		}{
 			{[]string{"-help", "-nonsense"}, "unknown flag -nonsense"},
 			{[]string{"-version", "-nonsense"}, "unknown flag -nonsense"},
-			{[]string{"-help", "-force"}, "-force is not accepted with -help"},
-			{[]string{"-version", "-force"}, "-force is not accepted with -version"},
+			// Each of the two names what it answers, not what the other does.
+			{[]string{"-help", "-force"}, "-force is not accepted with -help, which prints what the command takes"},
+			{[]string{"-version", "-force"}, "-force is not accepted with -version, which prints what this binary is"},
 			{[]string{"-help", "web"}, `"web" is not accepted with -help`},
 			{[]string{"-help", "-version"}, "ask for two answers"},
 			{[]string{"-json", "-human", "-help"}, "ask for two modes"},
