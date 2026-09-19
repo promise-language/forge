@@ -425,8 +425,7 @@ commits, and a tool never writes scratch into a directory `git add -A` would sta
   measurement writes is scratch under `.home/`, which the repository ignores and the subject
   therefore excludes.
 - **The envelope is base's.** The library guarantees how it is produced:
-  - It is written once, whole, after every measurement has returned, and carries the schema version
-    base's contract declares.
+  - It is written once, whole, after every measurement has returned.
   - It carries the host's `os/arch` as its target, unless the gate declares a target for the
     instance it measured.
   - It carries an incomplete reason whenever the run measured less than a full one, and never an
