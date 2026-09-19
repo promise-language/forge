@@ -144,6 +144,13 @@ compile: version "go1.26.0" does not match go tool version "go1.25.5"
 			"# example.com/x/bad\n",
 			built + "# example.com/x/bad",
 		},
+		{
+			// The header is still all the child said. A reason that stopped at
+			// the colon would name a build failure and carry nothing to act on.
+			"a header behind a blank line",
+			"\n# example.com/x/bad\n",
+			built + "# example.com/x/bad",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := coverageReason(c.stderr); got != c.want {
@@ -207,6 +214,34 @@ func TestCoverageThatMeasuredNothingSaysWhatTheChildSaid(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "too many return values") {
 		t.Errorf("the error is %q, want it to carry what the compiler said", err)
+	}
+}
+
+// A profile can also be unreadable after a run that succeeded — a unit that
+// declares no statements produces one with nothing but its mode header. Nothing
+// failed there, so the error names no failure: a reader told the run said
+// "<nil>" goes looking for one that did not happen, which is the same wrong turn
+// a build failure reported as a test failure sends them on.
+func TestCoverageThatMeasuredNothingOverARunThatSucceeded(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "")
+	// It compiles and it has no statements to cover, so `go test` exits 0 and
+	// writes a profile holding only `mode: set`.
+	write(t, root, "x.go", "package x\n\ntype T struct{ A int }\n")
+	git(t, root, "add", "-A")
+	r, _ := run(t, Standard(), root)
+
+	res, err := goCovered(r, Unit{Toolchain: "go"})
+	if err == nil {
+		t.Fatalf("a profile naming no statements was measured as %+v", res.Ratios)
+	}
+	if !strings.Contains(err.Error(), "named no statements") {
+		t.Errorf("the error is %q, want it to name the profile it could not read", err)
+	}
+	if strings.Contains(err.Error(), "<nil>") {
+		t.Errorf("the error is %q, and the test run did not fail", err)
 	}
 }
 

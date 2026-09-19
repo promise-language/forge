@@ -281,8 +281,8 @@ func goCovered(r *Run, u Unit) (UnitResult, error) {
 	_, stderr, testErr := r.Value(u, "go", "test", "-coverprofile="+profile, "./...")
 	hit, statements, err := coverageCounts(profile)
 	if err != nil {
-		return UnitResult{}, fmt.Errorf("coverage in %s: %w (the test run said: %v: %s)",
-			u.Label(), err, testErr, firstProblem(stderr))
+		return UnitResult{}, fmt.Errorf("coverage in %s: %w (the test run said: %s)",
+			u.Label(), err, whatTheRunSaid(testErr, stderr))
 	}
 	incomplete := ""
 	if testErr != nil {
@@ -292,6 +292,21 @@ func goCovered(r *Run, u Unit) (UnitResult, error) {
 		Ratios:     []Proportion{{Name: "statement_coverage", Part: hit, Whole: statements, Unit: "percent", Scale: 100}},
 		Incomplete: incomplete,
 	}, nil
+}
+
+// whatTheRunSaid is what a coverage run that produced no readable profile is
+// reported as having said. A run that exited non-zero is named with the line its
+// child wrote, and a run that exited 0 wrote no failure to name: the profile was
+// unreadable for a reason of its own, and a message ending in a status that is
+// not there sends a reader looking for a failure that did not happen.
+func whatTheRunSaid(testErr error, stderr string) string {
+	if testErr == nil {
+		return "nothing — it succeeded"
+	}
+	if problem := firstProblem(stderr); problem != "" {
+		return fmt.Sprintf("%v: %s", testErr, problem)
+	}
+	return fmt.Sprintf("%v", testErr)
 }
 
 // coverageReason says why a coverage run that exited non-zero measured less
@@ -643,15 +658,23 @@ func firstLine(s string) string {
 // person reads: the first one that is not a header. A header names the package a
 // build's diagnostics are grouped under without saying what is wrong with it,
 // and it is often the first line there is. Where every line is a header, that is
-// all the child said and it is what gets carried.
+// all the child said and it is what gets carried — the first header, not the
+// first line, because a stream that opens with a blank one still said something.
+// A reason that ended in a colon and nothing else would carry none of it.
 func firstProblem(s string) string {
+	header := ""
 	for line := range strings.SplitSeq(s, "\n") {
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "# ") {
-			continue
+		switch {
+		case strings.TrimSpace(line) == "":
+		case strings.HasPrefix(line, "# "):
+			if header == "" {
+				header = line
+			}
+		default:
+			return line
 		}
-		return line
 	}
-	return firstLine(s)
+	return header
 }
 
 // joinReasons is how several incomplete reasons become one. It is never an
