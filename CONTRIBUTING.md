@@ -37,6 +37,13 @@ stable `primitives/` helper library, and the design doc in `docs/blueprint.md`
    practical — especially for changes to the blueprint or the scaffolded layout.
 2. Keep `primitives/` semver-stable: it's a published dependency, so breaking
    changes to its surface need a deliberate version bump, not a drive-by edit.
-3. Run `go build ./...` and `go test ./...` before submitting, and keep the
-   scaffolder's output in sync with `docs/blueprint.md`.
+3. Run `./make`, then `bin/verify`, before submitting. `bin/verify` is the
+   gate: `go build ./...` and `go test ./...` cover part of what it measures
+   and none of the rest, so they are not a substitute for it
+   ([`docs/project-tools.md`](docs/project-tools.md),
+   [Verify](docs/project-tools.md#verify)). A change in behaviour lands in
+   `primitives/`, which a project imports at a pinned version and writes no
+   part of; update `cmd/init` only where the layout it emits has itself moved
+   ([`docs/blueprint.md`](docs/blueprint.md),
+   [Reference](docs/blueprint.md#reference)).
 4. Open a pull request and sign the CLA when prompted.
