@@ -248,6 +248,17 @@ func TestMissingIgnoreRulesReadsRulesNotText(t *testing.T) {
 // one statement of what setup requires; this asks git whether the emitted file
 // satisfies it.
 //
+// Both trees a scaffolder meets are asked, because they are different paths
+// through ensureGitignore: it writes the whole list into a tree carrying no
+// .gitignore, and appends only what is missing to one that already has a file.
+// The second is the path every project scaffolded before `.home/` joined the
+// list is on, and re-running the scaffolder is the repair for it — so a fresh
+// tree alone would leave the field untested. The regression is a concrete one:
+// ensureBuildDoc, directly below ensureGitignore, is made idempotent by a marker
+// comment, and ensureGitignore's block opens with a comment of exactly that
+// shape. Keying off it instead of off the rules would write a complete file into
+// a fresh tree and never repair a tree that already carries the block.
+//
 // One path per call. check-ignore exits 0 when ANY argument is ignored, so a
 // single call naming all three would answer 0 with two of them missing. The
 // entries are spelled as .gitignore carries them, anchored at the root, and a
@@ -258,13 +269,67 @@ func TestTheScaffoldedGitignoreCarriesWhatSetupRequires(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git on this machine")
 	}
-	ignores := scaffoldedIgnores(t, true)
-	for _, entry := range tooling.IgnoredDirs() {
-		out, code := ignores(strings.TrimPrefix(entry, "/"))
-		if code == 1 {
-			t.Errorf("a scaffolded project does not ignore %s, so its own setup refuses it", entry)
-		} else if code != 0 {
-			t.Fatalf("git check-ignore answered neither ignored nor tracked for %s (%d):\n%s", entry, code, out)
+	for _, c := range []struct {
+		name     string
+		existing string
+	}{
+		{"a tree carrying no .gitignore", ""},
+		{"a tree an earlier scaffolder already wrote one into", gitignoreBeforeHomeWasIgnored},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ignores := scaffoldedIgnores(t, c.existing, true)
+			for _, entry := range tooling.IgnoredDirs() {
+				out, code := ignores(strings.TrimPrefix(entry, "/"))
+				if code == 1 {
+					t.Errorf("a scaffolded project does not ignore %s, so its own setup refuses it", entry)
+				} else if code != 0 {
+					t.Fatalf("git check-ignore answered neither ignored nor tracked for %s (%d):\n%s", entry, code, out)
+				}
+			}
+		})
+	}
+}
+
+// gitignoreBeforeHomeWasIgnored is what ensureGitignore wrote into a fresh tree
+// before `.home/` was added to perClonePaths, byte for byte — the file every
+// project scaffolded until now carries.
+//
+// It is frozen here rather than built from perClonePaths deliberately. A seed
+// derived from the current list carries whatever that list carries, so it would
+// describe a tree that is already complete and the repair it stands in for would
+// have nothing to repair — the same way a check derived from the list agreed
+// with the list while `.home/` was missing from both.
+const gitignoreBeforeHomeWasIgnored = `
+# forge dev tooling — written per clone, never committed
+bin/
+.flow/
+.workspace/
+.mcp.json
+.claude/settings.local.json
+CLAUDE.local.md
+make.local
+`
+
+// The repaired case above is only a case if the tree it starts from is genuinely
+// short of the rule. Asked of the same seed with ensureGitignore left out, git
+// must report `.home/` TRACKED and the other two IGNORED: that is what "complete
+// by the old list, short by the rule" means, and each half fails differently.
+//
+// Without the first, a seed that already ignored `.home/` — or a machine whose
+// own excludes cover it — makes the repair green whatever ensureGitignore did.
+// Without the second, a seed that reached the repository as nothing at all reads
+// the same way, and the case would be a fresh tree wearing a second name.
+func TestTheEarlierScaffoldIsCompleteByTheOldListAndShortByTheRule(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	ignores := scaffoldedIgnores(t, gitignoreBeforeHomeWasIgnored, false)
+	if out, code := ignores(".home/"); code != 1 {
+		t.Errorf("the tree an earlier scaffolder wrote already ignores .home/ (%d), so repairing it proves nothing:\n%s", code, out)
+	}
+	for _, entry := range []string{"bin/", ".workspace/"} {
+		if out, code := ignores(entry); code != 0 {
+			t.Errorf("the seed does not ignore %s (%d), so it never reached the repository and is not the file an earlier scaffolder wrote:\n%s", entry, code, out)
 		}
 	}
 }
@@ -292,7 +357,7 @@ func TestNoEmittedFileIsIgnoredByTheGitignoreTheSameRunWrites(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git on this machine")
 	}
-	ignores := scaffoldedIgnores(t, true)
+	ignores := scaffoldedIgnores(t, "", true)
 
 	var emitted []string
 	for _, f := range files() {
@@ -325,7 +390,7 @@ func TestTheSiblingIsIgnoredByTheScaffoldedRuleAndNothingElse(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git on this machine")
 	}
-	if out, code := scaffoldedIgnores(t, false)(".claude/settings.local.json"); code != 1 {
+	if out, code := scaffoldedIgnores(t, "", false)(".claude/settings.local.json"); code != 1 {
 		t.Errorf("with no .gitignore written, git still answers that the sibling is ignored (%d) — the rule came from outside the repository:\n%s", code, out)
 	}
 }
@@ -335,19 +400,28 @@ func TestTheSiblingIsIgnoredByTheScaffoldedRuleAndNothingElse(t *testing.T) {
 // and check-ignore's status. writeIgnores selects whether ensureGitignore runs,
 // which is the one difference between the check above and its own control.
 //
+// existing is the .gitignore the tree already carries when the scaffolder
+// reaches it, "" for a tree that carries none. It is a parameter because
+// scaffolding into a repository that has been scaffolded before is a different
+// path through ensureGitignore — append what is missing, rather than write the
+// whole list — and the two must be asked the same question.
+//
 // Every query is asked with the ignore sources OUTSIDE the repository out of the
 // way, because an ignore rule only counts when the repository carries it, and a
 // rule from the machine's global config does not (workspace's `bootstrap.md`,
 // Setup owns the installed name set). Left in, a developer's excludes file
 // answers for the repository: green here and red on the next machine, and a
 // failure that names a scaffolder defect nobody can reproduce.
-func scaffoldedIgnores(t *testing.T, writeIgnores bool) func(paths ...string) (string, int) {
+func scaffoldedIgnores(t *testing.T, existing string, writeIgnores bool) func(paths ...string) (string, int) {
 	t.Helper()
 	dir := t.TempDir()
 	for _, f := range files() {
 		if _, err := writeFile(dir, f, "example/tools/build", false); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if existing != "" {
+		write(t, dir, ".gitignore", existing)
 	}
 	if writeIgnores {
 		if _, err := ensureGitignore(dir); err != nil {
