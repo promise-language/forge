@@ -138,6 +138,76 @@ func TestAGateThatCouldNotMeasureWritesNoEnvelope(t *testing.T) {
 	}
 }
 
+// The envelope is written once, whole, after every measurement has returned.
+// Nothing reaches stdout while a part is still measuring: an envelope arriving
+// in pieces would let a reader parse a prefix of a run as a run, where a run
+// killed part-way is meant to leave output that does not parse at all.
+func TestTheEnvelopeIsWrittenOnceWholeAfterEveryMeasurementHasReturned(t *testing.T) {
+	root := fixture(t, "")
+	stamp := stamped(t, root)
+
+	// Each part records what stdout had taken by the time it was asked to
+	// measure, so what is asserted is what a reader watching the stream could
+	// have seen rather than the shape of the code that fills it.
+	var out writeLog
+	seen := map[string]int{}
+	p := counting("a", []Metric{Count("a_n")}, Measured{}, nil)
+	a, _ := p.Gates.Get("a")
+	a.Measure = func(*Run, []Unit) (Measured, error) {
+		seen["a"] = len(out.writes)
+		return Measured{Metrics: []Measurement{Counted("a_n", 1, "")}}, nil
+	}
+	p.Gates.Add(a)
+	p.Gates.Add(Gate{
+		Name:    "b",
+		Summary: "the part that returns last",
+		Metrics: Declared(Count("b_n")),
+		Measure: func(*Run, []Unit) (Measured, error) {
+			seen["b"] = len(out.writes)
+			return Measured{Metrics: []Measurement{Counted("b_n", 2, "")}}, nil
+		},
+		Remediation: "there is nothing to do about a fixture",
+	})
+	p.Integration("a", "b")
+
+	var errs strings.Builder
+	status := GateTool(p, stamp).RunWith([]string{Integration, "--envelope"},
+		command.Streams{Out: &out, Err: &errs, Dir: root})
+	if status != command.StatusDone {
+		t.Fatalf("status = %d, want %d (stderr: %s)", status, command.StatusDone, errs.String())
+	}
+
+	for _, part := range []string{"a", "b"} {
+		if seen[part] != 0 {
+			t.Errorf("%s was asked to measure after stdout had taken %d write(s), want nothing written until every measurement has returned", part, seen[part])
+		}
+	}
+	if len(out.writes) != 1 {
+		t.Fatalf("stdout took %d writes, want one: a stream a reader can parse a prefix of reads a part-way run as a run", len(out.writes))
+	}
+
+	var env Envelope
+	if err := json.Unmarshal([]byte(out.writes[0]), &env); err != nil {
+		t.Fatalf("the one write is not a whole envelope (%v): %q", err, out.writes[0])
+	}
+	var reported []string
+	for _, m := range env.Metrics {
+		reported = append(reported, m.Name)
+	}
+	if !slices.Equal(reported, []string{"a_n", "b_n"}) {
+		t.Errorf("the one write reports %v, want every part's measurement in it", reported)
+	}
+}
+
+// writeLog is stdout as a reader watching it sees it: one entry per write, so a
+// result written whole is told apart from one that arrived in pieces.
+type writeLog struct{ writes []string }
+
+func (w *writeLog) Write(p []byte) (int, error) {
+	w.writes = append(w.writes, string(p))
+	return len(p), nil
+}
+
 // A declared name wins over a derived one: fit:disk is a gate of its own, not
 // the fit concept narrowed to a unit called disk.
 func TestADeclaredInstanceIsNotADerivedOne(t *testing.T) {
