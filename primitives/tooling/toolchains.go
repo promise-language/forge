@@ -272,24 +272,65 @@ func countTestEvents(out string) (tests, packages, count int64, read bool) {
 // The profile is scratch, so it is written under .home/tmp/ in a directory
 // unique to the run. A gate that dropped it in the worktree would have modified
 // the subject it was measuring.
+//
+// The test run's stderr is parsed rather than attached, because why the run
+// measured less than a green one is on it: an exit status alone cannot tell a
+// package that failed its tests from one that never compiled.
 func goCovered(r *Run, u Unit) (UnitResult, error) {
 	profile := r.Scratch("cover-" + u.Label() + ".out")
-	_, _, testErr := r.Output(u, "go", "test", "-coverprofile="+profile, "./...")
+	_, stderr, testErr := r.Value(u, "go", "test", "-coverprofile="+profile, "./...")
 	hit, statements, err := coverageCounts(profile)
 	if err != nil {
-		return UnitResult{}, fmt.Errorf("coverage in %s: %w (the test run said: %v)", u.Label(), err, testErr)
+		return UnitResult{}, fmt.Errorf("coverage in %s: %w (the test run said: %s)",
+			u.Label(), err, whatTheRunSaid(testErr, stderr))
 	}
 	incomplete := ""
 	if testErr != nil {
-		// Failing tests do not stop coverage from being reported, but they do
-		// mean this run measured less than a green one: a package whose tests
-		// failed contributes whatever ran before the failure.
-		incomplete = "some packages failed their tests, so their statements were only partly exercised"
+		incomplete = coverageReason(stderr)
 	}
 	return UnitResult{
 		Ratios:     []Proportion{{Name: "statement_coverage", Part: hit, Whole: statements, Unit: "percent", Scale: 100}},
 		Incomplete: incomplete,
 	}, nil
+}
+
+// whatTheRunSaid is what a coverage run that produced no readable profile is
+// reported as having said. A run that exited non-zero is named with the line its
+// child wrote, and a run that exited 0 wrote no failure to name: the profile was
+// unreadable for a reason of its own, and a message ending in a status that is
+// not there sends a reader looking for a failure that did not happen.
+func whatTheRunSaid(testErr error, stderr string) string {
+	if testErr == nil {
+		return "nothing — it succeeded"
+	}
+	if problem := firstProblem(stderr); problem != "" {
+		return fmt.Sprintf("%v: %s", testErr, problem)
+	}
+	return fmt.Sprintf("%v", testErr)
+}
+
+// coverageReason says why a coverage run that exited non-zero measured less
+// than a green one. A package that did not build and a package whose tests
+// failed are different facts: the first exercised none of its statements, and a
+// reader told the second goes looking for a failing test that does not exist.
+//
+// The two are told apart by the headers `go test` groups a build's diagnostics
+// under, which is what `builds` already counts unbuildable packages by. Not by
+// stderr being non-empty: `go test` writes `go: downloading …` there too, and a
+// test failure alongside a module download is not a build failure. In the other
+// direction the headers are the whole story, because `go test` gives a test
+// binary's own output to its stdout — what reaches its stderr came from the
+// toolchain or the build.
+//
+// Where both happened the build failure is what the reason names. It is the
+// stronger statement, and a reader who repairs the build re-runs and sees the
+// failing tests then.
+func coverageReason(stderr string) string {
+	if countDiagnosticModules(stderr) > 0 {
+		return "some packages did not build, so their statements were not exercised at all: " +
+			firstProblem(stderr)
+	}
+	return "some packages failed their tests, so their statements were only partly exercised"
 }
 
 // coverageCounts sums statements and covered statements out of one coverprofile.
@@ -611,6 +652,29 @@ func isDiagnostic(line string) bool {
 func firstLine(s string) string {
 	first, _, _ := strings.Cut(s, "\n")
 	return first
+}
+
+// firstProblem is the line of a child's stderr worth carrying into a reason a
+// person reads: the first one that is not a header. A header names the package a
+// build's diagnostics are grouped under without saying what is wrong with it,
+// and it is often the first line there is. Where every line is a header, that is
+// all the child said and it is what gets carried — the first header, not the
+// first line, because a stream that opens with a blank one still said something.
+// A reason that ended in a colon and nothing else would carry none of it.
+func firstProblem(s string) string {
+	header := ""
+	for line := range strings.SplitSeq(s, "\n") {
+		switch {
+		case strings.TrimSpace(line) == "":
+		case strings.HasPrefix(line, "# "):
+			if header == "" {
+				header = line
+			}
+		default:
+			return line
+		}
+	}
+	return header
 }
 
 // joinReasons is how several incomplete reasons become one. It is never an

@@ -1,6 +1,7 @@
 package tooling
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +83,11 @@ func TestTheCoverageProfileIsScratchInsideTheCheckout(t *testing.T) {
 	if len(res.Ratios) != 1 || res.Ratios[0].Name != "statement_coverage" || res.Ratios[0].Whole == 0 {
 		t.Errorf("coverage came back as %+v, want statements counted", res.Ratios)
 	}
+	// Nothing went wrong, so there is no reason to give. An incomplete run is
+	// never a pass, and one reported over a green run would fail it.
+	if res.Incomplete != "" {
+		t.Errorf("a run where everything built and passed reported %q, want no reason", res.Incomplete)
+	}
 
 	if want := filepath.Join(root, filepath.FromSlash(ScratchDir)); !strings.HasPrefix(r.ScratchRoot(), want) {
 		t.Fatalf("this run's scratch is %q, want it under %s", r.ScratchRoot(), want)
@@ -91,6 +97,195 @@ func TestTheCoverageProfileIsScratchInsideTheCheckout(t *testing.T) {
 	}
 	if after := git(t, root, "status", "--porcelain"); after != before {
 		t.Errorf("the measurement left the tracked tree changed:\nbefore\n%s\nafter\n%s", before, after)
+	}
+}
+
+// A package that did not build and a package whose tests failed are different
+// facts about a coverage run, and the reason names the one that happened. The
+// first case is the one this rule was written from: two Go installations on
+// PATH, `go tool compile` refusing to run, and no test failing at all. It is a
+// condition a test cannot stage, so what the toolchain wrote is what is read
+// here.
+func TestABuildFailureIsNotATestFailure(t *testing.T) {
+	const compilerVersions = `compile: version "go1.26.0" does not match go tool version "go1.25.5"
+# internal/coverage
+compile: version "go1.26.0" does not match go tool version "go1.25.5"
+`
+	const built = "some packages did not build, so their statements were not exercised at all: "
+	const tested = "some packages failed their tests, so their statements were only partly exercised"
+
+	for _, c := range []struct{ name, stderr, want string }{
+		{
+			"a toolchain that would not compile",
+			compilerVersions,
+			built + `compile: version "go1.26.0" does not match go tool version "go1.25.5"`,
+		},
+		{
+			// The header names the package without saying what is wrong with it,
+			// so the diagnostic under it is what a reader needs.
+			"a package that does not compile",
+			"# example.com/x/bad\n./bad.go:3:19: too many return values\n",
+			built + "./bad.go:3:19: too many return values",
+		},
+		{
+			"a run whose stderr said nothing",
+			"",
+			tested,
+		},
+		{
+			// `go test` writes this to stderr on a run whose tests then failed.
+			// Read as a build failure it would send a reader to a build that
+			// worked.
+			"stderr that names no package",
+			"go: downloading example.com/m v1.2.3\n",
+			tested,
+		},
+		{
+			"a header and nothing else",
+			"# example.com/x/bad\n",
+			built + "# example.com/x/bad",
+		},
+		{
+			// The header is still all the child said. A reason that stopped at
+			// the colon would name a build failure and carry nothing to act on.
+			"a header behind a blank line",
+			"\n# example.com/x/bad\n",
+			built + "# example.com/x/bad",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := coverageReason(c.stderr); got != c.want {
+				t.Errorf("coverageReason =\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+// The packages that did build are still measured, so the run reports coverage
+// and says why it is less than a green one's. It measures a real unit with a
+// real toolchain because the rule is about what `go test -coverprofile` writes
+// and produces when one package of several does not compile.
+func TestCoverageNamesTheBuildFailureItFound(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "")
+	write(t, root, filepath.Join("good", "good.go"), "package good\n\nfunc F() int { return 1 }\n")
+	write(t, root, filepath.Join("good", "good_test.go"),
+		"package good\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { F() }\n")
+	// It parses, so `go list` loads it and the run reaches it; it does not
+	// type-check, so it is a package that never compiled rather than one whose
+	// tests failed.
+	write(t, root, filepath.Join("bad", "bad.go"), "package bad\n\nfunc G() { return 1 }\n")
+	git(t, root, "add", "-A")
+	r, _ := run(t, Standard(), root)
+
+	res, err := goCovered(r, Unit{Toolchain: "go"})
+	if err != nil {
+		t.Fatalf("a run that produced a profile was read as nothing measured: %v", err)
+	}
+	if len(res.Ratios) != 1 || res.Ratios[0].Whole == 0 {
+		t.Errorf("coverage came back as %+v, want the statements of the package that built", res.Ratios)
+	}
+	if !strings.Contains(res.Incomplete, "did not build") {
+		t.Errorf("the reason is %q, want it to name the build failure", res.Incomplete)
+	}
+	if strings.Contains(res.Incomplete, "failed their tests") {
+		t.Errorf("the reason is %q, and no test failed", res.Incomplete)
+	}
+	if !strings.Contains(res.Incomplete, "too many return values") {
+		t.Errorf("the reason is %q, want it to carry what the compiler said", res.Incomplete)
+	}
+}
+
+// The other half of the rule: where nothing failed to build, a failing test is
+// what the reason names. The whole of telling the two apart rests on `go test`
+// giving a test binary's own output to its stdout, so a package whose tests fail
+// leaves the stderr this reads clean — a claim about the toolchain that only a
+// real run checks. Read the other way round, every red suite would report a
+// build failure that did not happen.
+func TestCoverageOverAFailingTestNamesTheTests(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "")
+	write(t, root, "x.go", "package x\n\nfunc F() int { return 1 }\n")
+	write(t, root, "x_test.go",
+		"package x\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { F(); t.Fatal(\"deliberate\") }\n")
+	git(t, root, "add", "-A")
+	r, _ := run(t, Standard(), root)
+
+	res, err := goCovered(r, Unit{Toolchain: "go"})
+	if err != nil {
+		t.Fatalf("a run that produced a profile was read as nothing measured: %v", err)
+	}
+	if len(res.Ratios) != 1 || res.Ratios[0].Whole == 0 {
+		t.Errorf("coverage came back as %+v, want the statements the failing test reached", res.Ratios)
+	}
+	if !strings.Contains(res.Incomplete, "failed their tests") {
+		t.Errorf("the reason is %q, want it to name the failing test", res.Incomplete)
+	}
+	if strings.Contains(res.Incomplete, "did not build") {
+		t.Errorf("the reason is %q, and every package built", res.Incomplete)
+	}
+}
+
+// A run that produced no readable profile measured nothing, and the error says
+// what the child said. An exit status on its own names no repair.
+func TestCoverageThatMeasuredNothingSaysWhatTheChildSaid(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "")
+	write(t, root, "x.go", "package x\n\nfunc F() { return 1 }\n")
+	git(t, root, "add", "-A")
+	r, _ := run(t, Standard(), root)
+
+	res, err := goCovered(r, Unit{Toolchain: "go"})
+	if err == nil {
+		t.Fatalf("a run where nothing compiled was measured as %+v", res.Ratios)
+	}
+	if !strings.Contains(err.Error(), "too many return values") {
+		t.Errorf("the error is %q, want it to carry what the compiler said", err)
+	}
+}
+
+// A profile can also be unreadable after a run that succeeded — a unit that
+// declares no statements produces one with nothing but its mode header. Nothing
+// failed there, so the error names no failure: a reader told the run said
+// "<nil>" goes looking for one that did not happen, which is the same wrong turn
+// a build failure reported as a test failure sends them on.
+func TestCoverageThatMeasuredNothingOverARunThatSucceeded(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "")
+	// It compiles and it has no statements to cover, so `go test` exits 0 and
+	// writes a profile holding only `mode: set`.
+	write(t, root, "x.go", "package x\n\ntype T struct{ A int }\n")
+	git(t, root, "add", "-A")
+	r, _ := run(t, Standard(), root)
+
+	res, err := goCovered(r, Unit{Toolchain: "go"})
+	if err == nil {
+		t.Fatalf("a profile naming no statements was measured as %+v", res.Ratios)
+	}
+	if !strings.Contains(err.Error(), "named no statements") {
+		t.Errorf("the error is %q, want it to name the profile it could not read", err)
+	}
+	if strings.Contains(err.Error(), "<nil>") {
+		t.Errorf("the error is %q, and the test run did not fail", err)
+	}
+}
+
+// The third state a run that measured nothing can be in: it failed, and it wrote
+// nothing to the stderr this reads — a failing test says so on stdout, and a
+// profile naming no statements is unreadable whether or not one did. The status
+// is then all there is to carry, and it is carried alone. A message ending in a
+// colon with nothing behind it reads as a child's output that was elided.
+func TestAFailedRunThatWroteNothingCarriesItsStatusAlone(t *testing.T) {
+	if got := whatTheRunSaid(errors.New("exit status 1"), ""); got != "exit status 1" {
+		t.Errorf("whatTheRunSaid = %q, want the status with nothing after it", got)
 	}
 }
 
