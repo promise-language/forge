@@ -23,10 +23,61 @@ func TestHelpAndVersion(t *testing.T) {
 		got.says(t, "help", got.out, "-force", "boolean", "overwrite what is there", "-json", "-version")
 	})
 
-	t.Run("it answers even when the other flags are wrong", func(t *testing.T) {
-		got := invoke(t, tool, []string{"-help", "-nonsense"}, Streams{OutIsTerminal: true})
-		if got.status != StatusDone {
-			t.Errorf("status %d — a person who asked what a command takes is not served by a list of their other mistakes", got.status)
+	t.Run("it answers an invocation that carries nothing else", func(t *testing.T) {
+		withParam := toolWithFlag(Flag{Name: "force", Type: Boolean, Description: "overwrite what is there"})
+		withParam.Root.Params = []Param{{Name: "target", Type: String, Arity: Optional, Description: "what to build"}}
+
+		// Whatever else is on the line is refused rather than ignored: the
+		// operator who typed `tool -help web` may have meant the help and may
+		// have meant the command, and guessing is worse than either answer.
+		for _, refused := range []struct {
+			args []string
+			says string
+		}{
+			{[]string{"-help", "-nonsense"}, "unknown flag -nonsense"},
+			{[]string{"-version", "-nonsense"}, "unknown flag -nonsense"},
+			{[]string{"-help", "-force"}, "-force is not accepted with -help"},
+			{[]string{"-version", "-force"}, "-force is not accepted with -version"},
+			{[]string{"-help", "web"}, `"web" is not accepted with -help`},
+			{[]string{"-help", "-version"}, "ask for two answers"},
+			{[]string{"-json", "-human", "-help"}, "ask for two modes"},
+		} {
+			got := invoke(t, withParam, refused.args, Streams{OutIsTerminal: true})
+			if got.status != StatusMalformed {
+				t.Errorf("%v exited %d, want %d", refused.args, got.status, StatusMalformed)
+			}
+			if got.out != "" {
+				t.Errorf("%v wrote %q to stdout, having done nothing", refused.args, got.out)
+			}
+			got.says(t, "stderr", got.errs, refused.says)
+		}
+
+		// The two output modes are the whole of what they take beside them.
+		got := invoke(t, withParam, []string{"-help", "-json"}, Streams{OutIsTerminal: true})
+		if got.status != StatusDone || !json.Valid([]byte(got.out)) {
+			t.Errorf("(%q, %d), want the surface as data at a terminal", got.out, got.status)
+		}
+		forced := toolWithFlag()
+		forced.Version = "v1.2.3"
+		got = invoke(t, forced, []string{"-version", "-human"}, Streams{})
+		if got.status != StatusDone || strings.TrimSpace(got.out) != "tool v1.2.3" {
+			t.Errorf("(%q, %d), want the human line through a pipe", got.out, got.status)
+		}
+	})
+
+	t.Run("what the invocation leaves out is not a problem", func(t *testing.T) {
+		// The required parameters are required of the invocation that runs the
+		// command, and the one asking what the command takes does not run it:
+		// what it is missing is the answer it came for.
+		required := toolWithFlag(Flag{Name: "remote", Type: String, Required: true, Description: "where to push"})
+		required.Root.Params = []Param{{Name: "target", Type: String, Arity: One, Description: "what to build"}}
+		required.Root.Validate = func(*Call) []error { return []error{errNoTarget} }
+
+		for _, args := range [][]string{{"-help"}, {"-version"}} {
+			got := invoke(t, required, args, Streams{OutIsTerminal: true})
+			if got.status != StatusDone {
+				t.Errorf("`tool %s` exited %d (%q), want the answer it came for", args[0], got.status, got.errs)
+			}
 		}
 	})
 

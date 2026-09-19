@@ -114,5 +114,13 @@ func TestInputFromAFile(t *testing.T) {
 			t.Errorf("status %d, want the help the key asked for", got.status)
 		}
 		got.says(t, "help", got.out, "Usage")
+
+		// -json-input is how the parameters arrived rather than one of them, so
+		// it is not company; what the file supplies beside the help is.
+		got = invoke(t, tool, []string{"-json-input", write(t, `{"help":true,"force":true}`)}, Streams{OutIsTerminal: true})
+		if got.status != StatusMalformed {
+			t.Errorf("status %d, want -force refused beside the help", got.status)
+		}
+		got.says(t, "stderr", got.errs, "-force is not accepted with -help")
 	})
 }
