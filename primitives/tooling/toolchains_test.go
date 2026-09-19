@@ -1,6 +1,7 @@
 package tooling
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -197,6 +198,38 @@ func TestCoverageNamesTheBuildFailureItFound(t *testing.T) {
 	}
 }
 
+// The other half of the rule: where nothing failed to build, a failing test is
+// what the reason names. The whole of telling the two apart rests on `go test`
+// giving a test binary's own output to its stdout, so a package whose tests fail
+// leaves the stderr this reads clean — a claim about the toolchain that only a
+// real run checks. Read the other way round, every red suite would report a
+// build failure that did not happen.
+func TestCoverageOverAFailingTestNamesTheTests(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	root := fixture(t, "")
+	write(t, root, "x.go", "package x\n\nfunc F() int { return 1 }\n")
+	write(t, root, "x_test.go",
+		"package x\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { F(); t.Fatal(\"deliberate\") }\n")
+	git(t, root, "add", "-A")
+	r, _ := run(t, Standard(), root)
+
+	res, err := goCovered(r, Unit{Toolchain: "go"})
+	if err != nil {
+		t.Fatalf("a run that produced a profile was read as nothing measured: %v", err)
+	}
+	if len(res.Ratios) != 1 || res.Ratios[0].Whole == 0 {
+		t.Errorf("coverage came back as %+v, want the statements the failing test reached", res.Ratios)
+	}
+	if !strings.Contains(res.Incomplete, "failed their tests") {
+		t.Errorf("the reason is %q, want it to name the failing test", res.Incomplete)
+	}
+	if strings.Contains(res.Incomplete, "did not build") {
+		t.Errorf("the reason is %q, and every package built", res.Incomplete)
+	}
+}
+
 // A run that produced no readable profile measured nothing, and the error says
 // what the child said. An exit status on its own names no repair.
 func TestCoverageThatMeasuredNothingSaysWhatTheChildSaid(t *testing.T) {
@@ -242,6 +275,17 @@ func TestCoverageThatMeasuredNothingOverARunThatSucceeded(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "<nil>") {
 		t.Errorf("the error is %q, and the test run did not fail", err)
+	}
+}
+
+// The third state a run that measured nothing can be in: it failed, and it wrote
+// nothing to the stderr this reads — a failing test says so on stdout, and a
+// profile naming no statements is unreadable whether or not one did. The status
+// is then all there is to carry, and it is carried alone. A message ending in a
+// colon with nothing behind it reads as a child's output that was elided.
+func TestAFailedRunThatWroteNothingCarriesItsStatusAlone(t *testing.T) {
+	if got := whatTheRunSaid(errors.New("exit status 1"), ""); got != "exit status 1" {
+		t.Errorf("whatTheRunSaid = %q, want the status with nothing after it", got)
 	}
 }
 
