@@ -238,6 +238,37 @@ func TestMissingIgnoreRulesReadsRulesNotText(t *testing.T) {
 	}
 }
 
+// A scaffolded project must pass its own `setup`, whose second step refuses
+// until the committed .gitignore ignores every entry tooling.IgnoredDirs()
+// names, as `git check-ignore` reports them (docs/project-tools.md, Setup).
+//
+// It is asked of the RULE rather than of perClonePaths, because a test derived
+// from the same list the code writes agrees with that list whatever is in it —
+// which is how `.home/` came to be missing from both at once. tooling holds the
+// one statement of what setup requires; this asks git whether the emitted file
+// satisfies it.
+//
+// One path per call. check-ignore exits 0 when ANY argument is ignored, so a
+// single call naming all three would answer 0 with two of them missing. The
+// entries are spelled as .gitignore carries them, anchored at the root, and a
+// path beginning with "/" is an absolute one — never inside the repository — so
+// the anchor comes off exactly as CheckIgnores takes it off. The trailing slash
+// stays: a directory rule does not match the name without it.
+func TestTheScaffoldedGitignoreCarriesWhatSetupRequires(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	ignores := scaffoldedIgnores(t, true)
+	for _, entry := range tooling.IgnoredDirs() {
+		out, code := ignores(strings.TrimPrefix(entry, "/"))
+		if code == 1 {
+			t.Errorf("a scaffolded project does not ignore %s, so its own setup refuses it", entry)
+		} else if code != 0 {
+			t.Fatalf("git check-ignore answered neither ignored nor tracked for %s (%d):\n%s", entry, code, out)
+		}
+	}
+}
+
 // One run writes both the emitted files and the .gitignore beside them, and the
 // two must not disagree: what the scaffolder emits, it emits to be COMMITTED.
 // `.claude/settings.json` is the case that makes this load-bearing — it is
