@@ -197,6 +197,69 @@ func TestAMeasurementThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 	}
 }
 
+// A measurement crosses the process boundary as JSON and comes back as the same
+// number in the same type. `gate --envelope` writes this form and `run
+// --verdict` reads it, so the round trip is the whole of what the two halves
+// agree on: a count that came back a float would be judged against a term that
+// was never written for it.
+func TestAMeasurementRoundTripsInItsOwnType(t *testing.T) {
+	for _, want := range []Measurement{
+		Counted("failed_tests", 0, ""),
+		Counted("worktree_free_bytes", 1<<40, "bytes"),
+		Counted("negative", -3, ""),
+		Quantity("statement_coverage", 41.5, "percent"),
+		// A quantity whose value happens to be whole is still a quantity. This
+		// is the one the wire can lose: 40 and 40.0 are the same JSON number,
+		// and only the type travelling beside it keeps them apart.
+		Quantity("statement_coverage", 40, "percent"),
+	} {
+		t.Run(want.Name+"/"+want.String(), func(t *testing.T) {
+			body, err := json.Marshal(want)
+			if err != nil {
+				t.Fatalf("marshalling %+v: %v", want, err)
+			}
+			var got Measurement
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatalf("unmarshalling %s: %v", body, err)
+			}
+			if got != want {
+				t.Errorf("%s came back as %+v, want %+v", body, got, want)
+			}
+		})
+	}
+}
+
+// What the wire form refuses. A measurement with no type cannot be written,
+// because a reader cannot tell a count of none from a number nothing measured;
+// and a value that is not what the wire declared cannot be read back, because
+// absorbing it would be a type change nothing recorded.
+func TestTheWireFormRefusesAMeasurementItCannotRepresent(t *testing.T) {
+	// Marshalling: the type is what says which number this is, so a
+	// measurement without one has no wire form at all.
+	if body, err := json.Marshal(Measurement{Name: "n", Int: 3}); err == nil {
+		t.Errorf("a measurement with no type was written as %s", body)
+	}
+
+	for _, c := range []struct {
+		name string
+		body string
+	}{
+		{"a count arriving with a fractional part", `{"name":"n","type":"int","value":1.5}`},
+		{"a count arriving as a string", `{"name":"n","type":"int","value":"3"}`},
+		{"a quantity arriving as a string", `{"name":"n","type":"float","value":"1.5"}`},
+		{"a type this library does not know", `{"name":"n","type":"decimal","value":1}`},
+		{"no type at all", `{"name":"n","value":1}`},
+		{"not an object", `["n",1]`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var m Measurement
+			if err := json.Unmarshal([]byte(c.body), &m); err == nil {
+				t.Errorf("%s was read back as %+v", c.body, m)
+			}
+		})
+	}
+}
+
 // A composition's metrics are its parts' metrics and its groups are its parts'
 // groups, and a part that is incomplete makes the whole incomplete, naming the
 // part.
