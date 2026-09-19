@@ -242,8 +242,9 @@ func writeFile(absTarget string, f file, mod string, force bool) (written, error
 
 // perClonePaths is every path this layout writes that is per-clone and
 // per-host, and therefore never committed: the built tools, the flow and
-// provisioning state, and the local overrides a developer or a workspace writes
-// beside the tracked file it extends.
+// provisioning state, the scratch and toolchain caches a run writes
+// (docs/project-tools.md, Writes and processes), and the local overrides a
+// developer or a workspace writes beside the tracked file it extends.
 //
 // The list is exhaustive rather than illustrative because a workspace REFUSES a
 // checkout that leaves one of them un-ignored — a path that is written on every
@@ -253,6 +254,7 @@ var perClonePaths = []string{
 	"bin/",
 	".flow/",
 	".workspace/",
+	".home/",
 	".mcp.json",
 	".claude/settings.local.json",
 	"CLAUDE.local.md",
