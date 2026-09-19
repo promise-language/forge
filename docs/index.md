@@ -53,5 +53,9 @@ issue #2.
   Go source.
 - [org/cli-guide.md](org/cli-guide.md) — How every command-line tool behaves at its invocation
   surface.
+- [org/identity.md](org/identity.md) — What names a host, a guest, an arena, a tool and a
+  process; who creates each and where each is kept.
+- [org/logging.md](org/logging.md) — How the development tools and the orchestration system log:
+  the line, the log home, the bounds and the store.
 - [org/stamp.json](org/stamp.json) — The version stamp: the org release these copies came from,
   with per-file hashes.
