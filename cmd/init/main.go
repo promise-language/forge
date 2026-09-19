@@ -328,19 +328,29 @@ func ensureBuildDoc(absTarget string) (written, error) {
 	return written{Path: "CLAUDE.md", Action: action, Detail: "dev tooling section"}, nil
 }
 
-// appendToFile appends to a file, creating it if it is absent, and reports the
-// close alongside the write. A WriteString that succeeded into a buffer the
-// close then failed to flush is a write that did not land, and a discarded
-// close would let init report the file as updated anyway.
+// appendToFile appends to a file, creating it if it is absent.
 func appendToFile(path, body string) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
-	if _, err := f.WriteString(body); err != nil {
-		return errors.Join(err, f.Close())
+	return writeAndClose(f, body)
+}
+
+// writeAndClose writes and reports the close alongside the write. A write that
+// succeeded into a buffer the close then failed to flush is a write that did
+// not land, and a discarded close would let init report the file as updated
+// anyway. The close runs on the failing path too, so a write error does not
+// leak the handle.
+//
+// It takes the open file rather than the path because that is the only way the
+// close-fails path is reachable from a test: no portable filesystem call can be
+// asked to open successfully, accept a write, and then fail its close.
+func writeAndClose(w io.WriteCloser, body string) error {
+	if _, err := io.WriteString(w, body); err != nil {
+		return errors.Join(err, w.Close())
 	}
-	return f.Close()
+	return w.Close()
 }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
@@ -1046,8 +1056,8 @@ type Envelope struct {
 	Incomplete string §json:"incomplete,omitempty"§
 }
 
-// gateDef is either a leaf that measures, or a composition of other gates.
-type gateDef struct {
+// gateDefinition is either a leaf that measures, or a composition of other gates.
+type gateDefinition struct {
 	summary string
 	measure func(repoRoot string, modules []string) ([]Metric, string, error)
 	parts   []string
@@ -1060,7 +1070,7 @@ type gateDef struct {
 // This is the starter set. Add what your project measures; the only names that
 // are not yours to choose are §integration§, which is what a decision to land a
 // change rests on, and §fit§, which is about the machine rather than the code.
-var gates = map[string]gateDef{
+var gates = map[string]gateDefinition{
 	"formatted": {
 		summary: "source files that gofmt would rewrite",
 		measure: measureFormatted,
@@ -1271,11 +1281,11 @@ func measureTested(_ string, modules []string) ([]Metric, string, error) {
 	}, "", nil
 }
 
-// prereqCommands names the commands this project's pipeline runs and cannot
+// prerequisiteCommands names the commands this project's pipeline runs and cannot
 // substitute for. Grow it as the pipeline grows: a prerequisite that is not
 // listed is one whose absence is discovered by a step failing for a reason that
 // reads like the code's fault.
-func prereqCommands() []string { return []string{"go", "gofmt", "git"} }
+func prerequisiteCommands() []string { return []string{"go", "gofmt", "git"} }
 
 // measureFit counts the prerequisites this machine does not have.
 //
@@ -1289,13 +1299,13 @@ func prereqCommands() []string { return []string{"go", "gofmt", "git"} }
 // machine is unfit without telling them what to install.
 func measureFit(_ string, _ []string) ([]Metric, string, error) {
 	missing := 0
-	for _, cmd := range prereqCommands() {
+	for _, cmd := range prerequisiteCommands() {
 		if _, found := primitives.Which(cmd); !found {
 			fmt.Fprintf(os.Stderr, "==> missing prerequisite: %s\n", cmd)
 			missing++
 		}
 	}
-	return []Metric{Count("missing_prereqs", missing)}, "", nil
+	return []Metric{Count("missing_prerequisites", missing)}, "", nil
 }
 
 // maxToolOutput bounds what a gate runner reads from a child's stdout. 10 MiB
@@ -1784,7 +1794,7 @@ func manifestRepo(t *testing.T, body string) string {
 	return dir
 }
 
-const capMissingPrereqs = §{"missing_prereqs": {"direction": "at_most", "cap": 0}}§
+const capMissingPrerequisites = §{"missing_prerequisites": {"direction": "at_most", "cap": 0}}§
 
 func TestMeasureGateRefusesAnUnknownName(t *testing.T) {
 	env, err := MeasureGate(t.TempDir(), "coverage")
@@ -1838,18 +1848,18 @@ func TestJudgeLeavesAnUncappedMetricAlone(t *testing.T) {
 }
 
 func TestJudgeFailsACappedMetricOverItsCapAndNamesTheTerm(t *testing.T) {
-	manifest := map[string]Threshold{"missing_prereqs": {Direction: AtMost, Cap: 0}}
-	env := Envelope{Gate: "fit", Metrics: []Metric{Count("missing_prereqs", 2)}}
+	manifest := map[string]Threshold{"missing_prerequisites": {Direction: AtMost, Cap: 0}}
+	env := Envelope{Gate: "fit", Metrics: []Metric{Count("missing_prerequisites", 2)}}
 	acceptable, thresholds, detail := judge(env, manifest)
 	if acceptable {
 		t.Fatal("2 is over a cap of 0 and was accepted")
 	}
-	if !strings.Contains(detail, "missing_prereqs") {
+	if !strings.Contains(detail, "missing_prerequisites") {
 		t.Errorf("the failure does not name the term it rests on: %q", detail)
 	}
 	// The verdict travels with what it was reached from, or nobody who was not
 	// there can re-check it.
-	if _, ok := thresholds["missing_prereqs"]; !ok {
+	if _, ok := thresholds["missing_prerequisites"]; !ok {
 		t.Errorf("the applied term was not reported: %v", thresholds)
 	}
 }
@@ -1886,8 +1896,8 @@ func TestJudgeRefusesAnIncompleteRunWithEveryNumberInCap(t *testing.T) {
 }
 
 func TestJudgeStdinAnswersOneVerdictCarryingItsTerms(t *testing.T) {
-	root := manifestRepo(t, capMissingPrereqs)
-	env, err := json.Marshal(Envelope{Gate: "fit", Metrics: []Metric{Count("missing_prereqs", 0)}})
+	root := manifestRepo(t, capMissingPrerequisites)
+	env, err := json.Marshal(Envelope{Gate: "fit", Metrics: []Metric{Count("missing_prerequisites", 0)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1907,7 +1917,7 @@ func TestJudgeStdinAnswersOneVerdictCarryingItsTerms(t *testing.T) {
 // never both, because a half-formed verdict beside an error message is a second
 // channel and the two could disagree.
 func TestJudgeStdinAnswersNothingWhenItRefuses(t *testing.T) {
-	root := manifestRepo(t, capMissingPrereqs)
+	root := manifestRepo(t, capMissingPrerequisites)
 	other, err := json.Marshal(Envelope{Gate: "tested", Metrics: []Metric{Count("failed_tests", 0)}})
 	if err != nil {
 		t.Fatal(err)
@@ -2592,7 +2602,7 @@ const thresholdsJSON = `{
     "direction": "at_most",
     "cap": 0
   },
-  "missing_prereqs": {
+  "missing_prerequisites": {
     "direction": "at_most",
     "cap": 0
   }
