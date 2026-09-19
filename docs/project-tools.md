@@ -70,11 +70,10 @@ under judgement cannot move them in the same change (tool-contract.md, Layout).
 > never learns which language the tools it is talking to were written in, and nothing it does
 > depends on knowing.
 
-**That invariant is this document's own**, and it is what base#20 and reactor#5 ask base's and
-reactor's documents to carry, because a caller cannot be taught a dialect per project: a flow
-spawns `bin/gate <name> --envelope` in every repository it resolves an item in, `workspace setup`
-asks `bin/run --list`, and a conformance checker reads both, with no way to discover which tooling
-a checkout holds.
+**That invariant is this document's own**, because a caller cannot be taught a dialect per
+project: a flow spawns `bin/gate <name> --envelope` in every repository it resolves an item in,
+`workspace setup` asks `bin/run --list`, and a conformance checker reads both, with no way to
+discover which tooling a checkout holds.
 
 **What must be identical is what a caller can observe**: the invocations, the wires, the exit
 statuses, and the vocabulary of names. What may differ is delivery — what builds a tool, and where
