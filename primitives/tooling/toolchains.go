@@ -77,7 +77,7 @@ func (t Toolchain) owns(tracked string) bool {
 // and a measurement needing it could not be taken either way.
 func (t Toolchain) present(r *Run) string {
 	for _, program := range t.Programs {
-		if primitives.Which(program) == "" {
+		if _, found := primitives.Which(program); !found {
 			return fmt.Sprintf("%s: %s is not on PATH", t.Name, program)
 		}
 	}
@@ -275,7 +275,7 @@ func countTestEvents(out string) (tests, packages, count int64, read bool) {
 func goCovered(r *Run, u Unit) (UnitResult, error) {
 	profile := r.Scratch("cover-" + u.Label() + ".out")
 	_, _, testErr := r.Output(u, "go", "test", "-coverprofile="+profile, "./...")
-	hit, stmts, err := coverageCounts(profile)
+	hit, statements, err := coverageCounts(profile)
 	if err != nil {
 		return UnitResult{}, fmt.Errorf("coverage in %s: %w (the test run said: %v)", u.Label(), err, testErr)
 	}
@@ -287,7 +287,7 @@ func goCovered(r *Run, u Unit) (UnitResult, error) {
 		incomplete = "some packages failed their tests, so their statements were only partly exercised"
 	}
 	return UnitResult{
-		Ratios:     []Proportion{{Name: "statement_coverage", Part: hit, Whole: stmts, Unit: "percent", Scale: 100}},
+		Ratios:     []Proportion{{Name: "statement_coverage", Part: hit, Whole: statements, Unit: "percent", Scale: 100}},
 		Incomplete: incomplete,
 	}, nil
 }
@@ -299,7 +299,7 @@ func goCovered(r *Run, u Unit) (UnitResult, error) {
 //
 // and the counts come from there rather than from `go tool cover -func`, which
 // prints a percentage and not the statement counts behind it.
-func coverageCounts(path string) (hit, stmts int64, err error) {
+func coverageCounts(path string) (hit, statements int64, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, 0, fmt.Errorf("no profile was produced: %w", err)
@@ -323,15 +323,15 @@ func coverageCounts(path string) (hit, stmts int64, err error) {
 		if err != nil {
 			return 0, 0, fmt.Errorf("execution count in %q: %w", line, err)
 		}
-		stmts += n
+		statements += n
 		if count > 0 {
 			hit += n
 		}
 	}
-	if stmts == 0 {
+	if statements == 0 {
 		return 0, 0, fmt.Errorf("the profile named no statements")
 	}
-	return hit, stmts, nil
+	return hit, statements, nil
 }
 
 // Promise is the Promise toolchain.

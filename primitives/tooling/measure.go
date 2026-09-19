@@ -96,6 +96,10 @@ type measurementWire struct {
 	Unit  string          `json:"unit,omitempty"`
 }
 
+// MarshalJSON writes the measurement in its wire form: the number rendered in
+// its own type, and the type beside it. A measurement carrying no type is
+// refused rather than written as a zero, because a reader cannot tell a count
+// of none from a number nothing measured.
 func (m Measurement) MarshalJSON() ([]byte, error) {
 	w := measurementWire{Name: m.Name, Type: m.Type, Unit: m.Unit}
 	switch m.Type {
@@ -114,6 +118,9 @@ func (m Measurement) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w)
 }
 
+// UnmarshalJSON reads the wire form back, holding the value to the type the
+// wire declared: a count arriving with a fractional part, or a type the library
+// does not know, is an error rather than a silently widened number.
 func (m *Measurement) UnmarshalJSON(b []byte) error {
 	var w measurementWire
 	if err := json.Unmarshal(b, &w); err != nil {

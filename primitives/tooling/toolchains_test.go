@@ -184,12 +184,12 @@ func TestCoverageCountsComeFromTheProfile(t *testing.T) {
 		"example.com/x/a.go:3.1,4.2 3 0\n"+
 		"example.com/x/b.go:1.1,2.2 2 7\n")
 
-	hit, stmts, err := coverageCounts(profile)
+	hit, statements, err := coverageCounts(profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hit != 7 || stmts != 10 {
-		t.Errorf("(hit, statements) = (%d, %d), want (7, 10)", hit, stmts)
+	if hit != 7 || statements != 10 {
+		t.Errorf("(hit, statements) = (%d, %d), want (7, 10)", hit, statements)
 	}
 
 	for _, c := range []struct{ name, body string }{
@@ -265,6 +265,65 @@ y.pr:1:1: something else is wrong`
 	}
 	if got := firstLine("one\ntwo"); got != "one" {
 		t.Errorf("firstLine = %q", got)
+	}
+}
+
+// present is what `fit:toolchain` counts, and it answers on two grounds: a
+// program that is not on PATH, and a program that is there and cannot state a
+// version. Both are measured here against toolchains this test declares, rather
+// than through the gate: the gate-level test can only measure the absence of a
+// toolchain this machine happens not to have, so it skips itself on any machine
+// that has Promise installed — and a rule nothing measures on a developer's own
+// machine is a rule nothing measures.
+func TestAToolchainIsAbsentWhenItsProgramIsMissingOrCannotStateAVersion(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	r, _ := run(t, Standard(), fixture(t, ""))
+
+	for _, c := range []struct {
+		name      string
+		toolchain Toolchain
+		names     []string // absent, and the reason says these; present when empty
+	}{
+		{
+			name:      "a program that is not on PATH",
+			toolchain: Toolchain{Name: "invented", Programs: []string{"definitely-not-a-real-program-xyz"}},
+			names:     []string{"invented", "definitely-not-a-real-program-xyz", "not on PATH"},
+		},
+		{
+			name:      "a program that is there and cannot state a version",
+			toolchain: Toolchain{Name: "invented", Programs: []string{"go"}, Version: []string{"go", "definitely-not-a-subcommand"}},
+			names:     []string{"invented", "does not state a version"},
+		},
+		{
+			name:      "every program on PATH, with no version to state",
+			toolchain: Toolchain{Name: "invented", Programs: []string{"go"}},
+		},
+		{
+			name:      "a program that states its version",
+			toolchain: Toolchain{Name: "invented", Programs: []string{"go"}, Version: []string{"go", "version"}},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			why := c.toolchain.present(r)
+			if len(c.names) == 0 {
+				if why != "" {
+					t.Fatalf("a toolchain this machine has was reported missing: %q", why)
+				}
+				return
+			}
+			if why == "" {
+				t.Fatal("a toolchain this machine cannot run was reported present")
+			}
+			// The reason is the evidence fit:toolchain narrates, so it has to
+			// name which toolchain and which program, not just that one failed.
+			for _, name := range c.names {
+				if !strings.Contains(why, name) {
+					t.Errorf("the reason %q does not name %q", why, name)
+				}
+			}
+		})
 	}
 }
 

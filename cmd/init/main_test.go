@@ -383,6 +383,132 @@ func TestEnsureBuildDocCreatesTheFileWhenAbsent(t *testing.T) {
 	}
 }
 
+// An append that cannot even be opened is an error, not a written record: a
+// section that never reached the disk must not be reported as one that did. A
+// directory standing where the file goes is the one way to make the open fail
+// identically on every platform.
+//
+// This covers the open only. What the close reports is
+// TestWriteAndCloseReportsTheCloseAsWellAsTheWrite, because no filesystem call
+// can be asked to fail a close on demand.
+func TestAnAppendThatCannotHappenIsReportedAndNotRecorded(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		file   string
+		ensure func(string) (written, error)
+	}{
+		{".gitignore", ".gitignore", ensureGitignore},
+		{"CLAUDE.md", "CLAUDE.md", ensureBuildDoc},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Mkdir(filepath.Join(dir, c.file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			got, err := c.ensure(dir)
+			if err == nil {
+				t.Fatalf("appending into a directory reported success: %+v", got)
+			}
+			if got != (written{}) {
+				t.Errorf("a failed append still answered a record: %+v", got)
+			}
+		})
+	}
+}
+
+// appendToFile creates what is absent and appends to what is there, and it is
+// the one implementation both ensure* functions write through.
+func TestAppendToFileCreatesThenAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.md")
+	if err := appendToFile(path, "one\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendToFile(path, "two\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, path); got != "one\ntwo\n" {
+		t.Errorf("appendToFile wrote %q, want %q", got, "one\ntwo\n")
+	}
+}
+
+// recordingFile is a file whose write and close can be made to fail, which a
+// real one cannot: a close that fails to flush is the condition the discarded
+// close hid, and it is unreachable through the filesystem.
+type recordingFile struct {
+	written  strings.Builder
+	writeErr error
+	closeErr error
+	closes   int
+}
+
+func (f *recordingFile) Write(p []byte) (int, error) {
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	return f.written.Write(p)
+}
+
+func (f *recordingFile) Close() error {
+	f.closes++
+	return f.closeErr
+}
+
+// A close that fails is a write that did not land, and it must reach the
+// caller — init prints "update .gitignore" off a nil error, so a swallowed
+// close is a report of a write that is not there. The write's own error must
+// survive alongside it, and the file must be closed on either path.
+func TestWriteAndCloseReportsTheCloseAsWellAsTheWrite(t *testing.T) {
+	writeFailed := errors.New("no space left on device")
+	closeFailed := errors.New("flushing on close failed")
+
+	for _, c := range []struct {
+		name          string
+		file          recordingFile
+		wants         []error
+		wantsNoError  bool
+		wantsRecorded string
+	}{
+		{name: "both succeed", wantsNoError: true, wantsRecorded: "body"},
+		{
+			name:          "the close fails after a write that succeeded",
+			file:          recordingFile{closeErr: closeFailed},
+			wants:         []error{closeFailed},
+			wantsRecorded: "body",
+		},
+		{
+			name:  "the write fails",
+			file:  recordingFile{writeErr: writeFailed},
+			wants: []error{writeFailed},
+		},
+		{
+			name:  "both fail",
+			file:  recordingFile{writeErr: writeFailed, closeErr: closeFailed},
+			wants: []error{writeFailed, closeFailed},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := writeAndClose(&c.file, "body")
+			if c.wantsNoError && err != nil {
+				t.Fatalf("a write and close that both succeeded answered %v", err)
+			}
+			if !c.wantsNoError && err == nil {
+				t.Fatal("a write or close that failed answered no error")
+			}
+			for _, want := range c.wants {
+				if !errors.Is(err, want) {
+					t.Errorf("error %v does not carry %v", err, want)
+				}
+			}
+			if c.file.closes != 1 {
+				t.Errorf("the file was closed %d times, want once", c.file.closes)
+			}
+			if c.file.written.String() != c.wantsRecorded {
+				t.Errorf("the file received %q, want %q", c.file.written.String(), c.wantsRecorded)
+			}
+		})
+	}
+}
+
 func TestExists(t *testing.T) {
 	dir := t.TempDir()
 	if exists(filepath.Join(dir, "nope")) {
@@ -969,7 +1095,7 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 		if answer.Verdict.Acceptable {
 			t.Errorf("a machine with no toolchain was acceptable: %s", body.String())
 		}
-		if !strings.Contains(answer.Verdict.Detail, "missing_prereqs") {
+		if !strings.Contains(answer.Verdict.Detail, "missing_prerequisites") {
 			t.Errorf("the refusal does not name the term it rests on: %s", body.String())
 		}
 	})
@@ -1123,7 +1249,7 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 	t.Run("a measurement over its cap is a verdict, not an error", func(t *testing.T) {
 		refused := exec.Command(filepath.Join(dir, "bin", "run"), "fit", "--verdict")
 		refused.Dir = dir
-		refused.Stdin = bytes.NewReader(withMetricValue(t, stdout, "missing_prereqs", 2))
+		refused.Stdin = bytes.NewReader(withMetricValue(t, stdout, "missing_prerequisites", 2))
 		var body, stderr bytes.Buffer
 		refused.Stdout, refused.Stderr = &body, &stderr
 		if err := refused.Run(); err != nil {
@@ -1141,10 +1267,10 @@ func TestScaffoldedTreeCompiles(t *testing.T) {
 			t.Errorf("2 missing prerequisites was acceptable against a cap of 0: %s", body.String())
 		}
 		// The term it was refused on, or nobody can tell which cap it broke.
-		if !strings.Contains(got.Detail, "missing_prereqs") {
+		if !strings.Contains(got.Detail, "missing_prerequisites") {
 			t.Errorf("the refusal does not name the term it rests on: %s", body.String())
 		}
-		if _, ok := got.Thresholds["missing_prereqs"]; !ok {
+		if _, ok := got.Thresholds["missing_prerequisites"]; !ok {
 			t.Errorf("the applied term was not reported: %s", body.String())
 		}
 	})
