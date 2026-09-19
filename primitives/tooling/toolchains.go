@@ -272,24 +272,50 @@ func countTestEvents(out string) (tests, packages, count int64, read bool) {
 // The profile is scratch, so it is written under .home/tmp/ in a directory
 // unique to the run. A gate that dropped it in the worktree would have modified
 // the subject it was measuring.
+//
+// The test run's stderr is parsed rather than attached, because why the run
+// measured less than a green one is on it: an exit status alone cannot tell a
+// package that failed its tests from one that never compiled.
 func goCovered(r *Run, u Unit) (UnitResult, error) {
 	profile := r.Scratch("cover-" + u.Label() + ".out")
-	_, _, testErr := r.Output(u, "go", "test", "-coverprofile="+profile, "./...")
+	_, stderr, testErr := r.Value(u, "go", "test", "-coverprofile="+profile, "./...")
 	hit, statements, err := coverageCounts(profile)
 	if err != nil {
-		return UnitResult{}, fmt.Errorf("coverage in %s: %w (the test run said: %v)", u.Label(), err, testErr)
+		return UnitResult{}, fmt.Errorf("coverage in %s: %w (the test run said: %v: %s)",
+			u.Label(), err, testErr, firstProblem(stderr))
 	}
 	incomplete := ""
 	if testErr != nil {
-		// Failing tests do not stop coverage from being reported, but they do
-		// mean this run measured less than a green one: a package whose tests
-		// failed contributes whatever ran before the failure.
-		incomplete = "some packages failed their tests, so their statements were only partly exercised"
+		incomplete = coverageReason(stderr)
 	}
 	return UnitResult{
 		Ratios:     []Proportion{{Name: "statement_coverage", Part: hit, Whole: statements, Unit: "percent", Scale: 100}},
 		Incomplete: incomplete,
 	}, nil
+}
+
+// coverageReason says why a coverage run that exited non-zero measured less
+// than a green one. A package that did not build and a package whose tests
+// failed are different facts: the first exercised none of its statements, and a
+// reader told the second goes looking for a failing test that does not exist.
+//
+// The two are told apart by the headers `go test` groups a build's diagnostics
+// under, which is what `builds` already counts unbuildable packages by. Not by
+// stderr being non-empty: `go test` writes `go: downloading …` there too, and a
+// test failure alongside a module download is not a build failure. In the other
+// direction the headers are the whole story, because `go test` gives a test
+// binary's own output to its stdout — what reaches its stderr came from the
+// toolchain or the build.
+//
+// Where both happened the build failure is what the reason names. It is the
+// stronger statement, and a reader who repairs the build re-runs and sees the
+// failing tests then.
+func coverageReason(stderr string) string {
+	if countDiagnosticModules(stderr) > 0 {
+		return "some packages did not build, so their statements were not exercised at all: " +
+			firstProblem(stderr)
+	}
+	return "some packages failed their tests, so their statements were only partly exercised"
 }
 
 // coverageCounts sums statements and covered statements out of one coverprofile.
@@ -611,6 +637,21 @@ func isDiagnostic(line string) bool {
 func firstLine(s string) string {
 	first, _, _ := strings.Cut(s, "\n")
 	return first
+}
+
+// firstProblem is the line of a child's stderr worth carrying into a reason a
+// person reads: the first one that is not a header. A header names the package a
+// build's diagnostics are grouped under without saying what is wrong with it,
+// and it is often the first line there is. Where every line is a header, that is
+// all the child said and it is what gets carried.
+func firstProblem(s string) string {
+	for line := range strings.SplitSeq(s, "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "# ") {
+			continue
+		}
+		return line
+	}
+	return firstLine(s)
 }
 
 // joinReasons is how several incomplete reasons become one. It is never an
