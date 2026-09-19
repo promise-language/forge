@@ -183,6 +183,14 @@ func TestAMeasurementThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 			[]Metric{Count("n")},
 			Measured{Metrics: []Measurement{Counted("n", 1, ""), Counted("n", 2, "")}},
 			"reported twice"},
+		{"a property where a count was declared",
+			[]Metric{Count("n")},
+			Measured{Metrics: []Measurement{Reported("n", true)}},
+			"declared int"},
+		{"a count where a property was declared",
+			[]Metric{Property("n")},
+			Measured{Metrics: []Measurement{Counted("n", 1, "")}},
+			"declared bool"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := counting("x", c.declared, c.measured, nil)
@@ -255,6 +263,96 @@ func TestTheWireFormRefusesAMeasurementItCannotRepresent(t *testing.T) {
 			var m Measurement
 			if err := json.Unmarshal([]byte(c.body), &m); err == nil {
 				t.Errorf("%s was read back as %+v", c.body, m)
+			}
+		})
+	}
+}
+
+// A property crosses the envelope as true and false. Encoded as one and zero it
+// would invite comparison and arithmetic that mean nothing, and nothing would
+// distinguish it from a count that happens to be small.
+func TestAPropertyCrossesTheEnvelopeAsTrueAndFalse(t *testing.T) {
+	root := fixture(t, "")
+	p := counting("x", []Metric{Property("builds_wasm")},
+		Measured{Metrics: []Measurement{Reported("builds_wasm", true)}}, nil)
+
+	env, err := MeasureGate(quiet(p, root), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, says := range []string{`"type":"bool"`, `"value":true`} {
+		if !strings.Contains(string(body), says) {
+			t.Errorf("the envelope is %s, want it to carry %s", body, says)
+		}
+	}
+	if strings.Contains(string(body), `"value":1`) {
+		t.Errorf("the envelope collapsed the property to a number: %s", body)
+	}
+
+	var read Envelope
+	if err := json.Unmarshal(body, &read); err != nil {
+		t.Fatal(err)
+	}
+	if got := read.Metrics[0]; got.Type != Bool || !got.Bool || got.String() != "true" {
+		t.Errorf("the property read back as %+v (%s), want the one that was measured", got, got.String())
+	}
+}
+
+// A value that is not what its type declared is refused at the boundary, in
+// either direction: the envelope is a claim and its check, and a reader that
+// narrowed a number into a bool would absorb a type change nothing recorded.
+func TestAPropertyCarryingANumberIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body string
+	}{
+		{"a number where bool was declared",
+			`{"gate":"x","metrics":[{"name":"n","type":"bool","value":1}]}`},
+		{"a bool where int was declared",
+			`{"gate":"x","metrics":[{"name":"n","type":"int","value":true}]}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var env Envelope
+			err := json.Unmarshal([]byte(c.body), &env)
+			if err == nil {
+				t.Fatalf("the envelope was read: %+v", env)
+			}
+			if !strings.Contains(err.Error(), "its value is not") {
+				t.Errorf("the refusal is %q, want it to name the value as the disagreement", err)
+			}
+		})
+	}
+}
+
+// The type set is closed, and widening it to bool did not open it. A type
+// outside the set is refused at decode rather than absorbed, because a
+// measurement whose type nothing recognises carries its value in none of the
+// fields a reader looks in: absorbed, it is zero, and zero is within a cap of
+// zero. A gate written in another language reaches this decoder having been
+// through none of the sending side's checks, so the near-miss spelling is the
+// case that matters.
+func TestAMetricTypeOutsideTheSetIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body string
+	}{
+		{"a near-miss spelling",
+			`{"gate":"x","metrics":[{"name":"n","type":"boolean","value":true}]}`},
+		{"no type at all",
+			`{"gate":"x","metrics":[{"name":"n","value":0}]}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var env Envelope
+			err := json.Unmarshal([]byte(c.body), &env)
+			if err == nil {
+				t.Fatalf("the envelope was read: %+v", env)
+			}
+			if !strings.Contains(err.Error(), "unknown type") {
+				t.Errorf("the refusal is %q, want it to name the type as the disagreement", err)
 			}
 		})
 	}

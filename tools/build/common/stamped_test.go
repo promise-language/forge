@@ -72,6 +72,60 @@ func TestTheCorpusGateCountsWhatTheStampDoesNotAccountFor(t *testing.T) {
 	}
 }
 
+// A re-vendor that goes wrong rarely goes wrong once: a release adds members,
+// drops them and rewrites others in one pass, so the count is every problem the
+// corpus has and not the first one found. A gate that stopped at one would
+// report a tree as one file wrong however many were, and each remaining problem
+// would surface only after the one before it was fixed.
+func TestTheCorpusGateCountsEveryProblemAtOnce(t *testing.T) {
+	root := corpus(t)
+	write(t, root, "docs/org/normative.md", "edited since it was vendored\n")
+	if err := os.Remove(filepath.Join(root, "docs", "org", "cli-guide.md")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "docs/org/smuggled.md", "arrived some other way\n")
+
+	r, narrated := runIn(t, root)
+	got, err := measureStamped(r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Metrics) != 1 || got.Metrics[0].Int != 3 {
+		t.Errorf("unstamped_files = %v, want 3", got.Metrics)
+	}
+	// Each of the three is named, so the one count resolves into the three
+	// facts behind it. The path is matched from its base name: the narration
+	// joins the corpus directory, which is spelled with the platform's
+	// separator, to a name that is always spelled with a slash.
+	for _, says := range []string{
+		"normative.md differs from the",
+		"cli-guide.md is named by the stamp and is not here",
+		"smuggled.md is here and the stamp does not name it",
+	} {
+		if !strings.Contains(narrated.String(), says) {
+			t.Errorf("the narration is %q, want it to say %q", narrated.String(), says)
+		}
+	}
+}
+
+// The line naming a drifted file names the release the stamp declares. The
+// gate's remediation is to re-vendor "from the release stamp.json names", and
+// this is where a person reads which release that is — the fact the stamp moves
+// at every upgrade, and the only part of it a measurement ever shows.
+func TestTheCorpusGateNamesTheReleaseTheStampDeclares(t *testing.T) {
+	root := corpusAt(t, "v9.9.9-fixture")
+	write(t, root, "docs/org/normative.md", "edited since it was vendored\n")
+
+	r, narrated := runIn(t, root)
+	if _, err := measureStamped(r, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(narrated.String(), "v9.9.9-fixture") {
+		t.Errorf("the narration is %q, and it does not name the release the stamp declares",
+			narrated.String())
+	}
+}
+
 // A stamp that cannot be read, or that names nothing, is a measurement that did
 // not happen rather than a corpus that is sound: "zero files wrong" is not a
 // reading of a check that was never made.
@@ -109,6 +163,13 @@ func TestAnAbsentStampIsRefused(t *testing.T) {
 // them.
 func corpus(t *testing.T) string {
 	t.Helper()
+	return corpusAt(t, "v1.0.0")
+}
+
+// corpusAt is corpus with the release the stamp declares chosen by the caller,
+// for the test that reads what the narration says about it.
+func corpusAt(t *testing.T, tag string) string {
+	t.Helper()
 	root := checkout(t)
 	files := map[string]string{
 		"normative.md": "what makes a document binding\n",
@@ -123,7 +184,7 @@ func corpus(t *testing.T) string {
 		}
 		entries = append(entries, `"`+name+`": "`+sum+`"`)
 	}
-	write(t, root, StampFile, `{"home": "promise-language/org", "tag": "v1.0.0", "files": {`+
+	write(t, root, StampFile, `{"home": "promise-language/org", "tag": "`+tag+`", "files": {`+
 		strings.Join(entries, ", ")+`}}`)
 	return root
 }

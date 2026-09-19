@@ -3,9 +3,10 @@ package tooling
 // The terms (docs/project-tools.md).
 //
 // A term a run may move is a baseline. A term only a person moves is a cap.
-// Caps live in tools/gates/thresholds.json and baselines in
-// tools/gates/baselines.json. A metric may have both, and when it does, they
-// agree on direction.
+// Where the two files live, what their entries hold and what `direction` means
+// are base's gate-contract.md, Caps and baselines; workspace's tool-contract.md,
+// Layout, is what places them in a managed project. What is here is how this
+// library reads them: strictly, and with the ratchet verify moves.
 //
 // The terms are kept apart from the code under measurement so the party under
 // judgement cannot move them in the same change, which is why the paths are
@@ -29,16 +30,18 @@ const (
 	BaselinesFile  = "tools/gates/baselines.json"
 )
 
-// Direction is the sense in which a measurement is compared to its term. It is
-// base's vocabulary, with the meaning that document gives it. The set is
-// closed: an unknown value is refused at load.
+// Direction is the side of its term a measurement must be on. It is base's
+// vocabulary, with the meaning that document gives it (gate-contract.md, What a
+// metric declares). The set is closed: an unknown value is refused at load.
 type Direction string
 
 const (
-	// Down means a smaller number is better, so a term is a ceiling.
-	Down Direction = "down"
-	// Up means a larger number is better, so a term is a floor.
-	Up Direction = "up"
+	// AtMost is a term the measurement must not exceed, so the term is a
+	// ceiling. It is inclusive: at_most 0 accepts 0.
+	AtMost Direction = "at_most"
+	// AtLeast is a term the measurement must not fall below, so the term is a
+	// floor. It is inclusive: at_least 75 accepts 75.
+	AtLeast Direction = "at_least"
 )
 
 // Cap is one entry of the thresholds file: a bound no history relaxes.
@@ -142,12 +145,12 @@ func readTerms(root, file string, into any) error {
 
 func knownDirection(file, name string, d Direction) error {
 	switch d {
-	case Down, Up:
+	case AtMost, AtLeast:
 		return nil
 	case "":
-		return fmt.Errorf("%s: %q states no direction (must be %q or %q)", file, name, Down, Up)
+		return fmt.Errorf("%s: %q states no direction (must be %q or %q)", file, name, AtMost, AtLeast)
 	}
-	return fmt.Errorf("%s: %q has unknown direction %q (must be %q or %q)", file, name, d, Down, Up)
+	return fmt.Errorf("%s: %q has unknown direction %q (must be %q or %q)", file, name, d, AtMost, AtLeast)
 }
 
 // For resolves a baseline to the value in force on one target. A baseline with
@@ -263,7 +266,7 @@ var ErrNothingJudged = fmt.Errorf("no metric this gate reported has a term, so t
 
 // beyond reports whether a measurement is on the wrong side of a term.
 func beyond(value, term float64, d Direction) bool {
-	if d == Down {
+	if d == AtMost {
 		return value > term
 	}
 	return value < term
@@ -308,7 +311,7 @@ func where(env Envelope, metric string, term float64, d Direction) string {
 // unit — so what explains a shortfall is the unit that is itself short, and a
 // unit at zero is the strongest evidence there is rather than the weakest.
 func contributed(value, term float64, d Direction) bool {
-	if d == Down {
+	if d == AtMost {
 		return value != 0
 	}
 	return beyond(value, term, d)

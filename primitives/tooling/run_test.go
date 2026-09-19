@@ -100,7 +100,7 @@ func TestTheRunTreePassesTheLibrarysCheck(t *testing.T) {
 // against another's terms answers a question nobody asked.
 func TestJudgingRefusesAnEnvelopeAnotherGateWrote(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 	p := counting("x", []Metric{Count("n")}, Measured{}, nil)
 	p.Gates.Add(Gate{
 		Name: "y", Summary: "another gate",
@@ -126,7 +126,7 @@ func TestJudgingRefusesAnEnvelopeAnotherGateWrote(t *testing.T) {
 // stdout on any error path: a caller reads one object or none.
 func TestJudgingRefusesWhatIsNotAnEnvelope(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 	p := counting("x", []Metric{Count("n")}, Measured{}, nil)
 
 	if _, err := JudgeStdin(quiet(p, root), "x", strings.NewReader("not an envelope")); err == nil {
@@ -141,7 +141,7 @@ func TestJudgingRefusesWhatIsNotAnEnvelope(t *testing.T) {
 // disagree about what this project allows.
 func TestBothModesReachTheVerdictThroughOneComparison(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 1}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 1}}`, `{}`)
 	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 4, "")}}, nil)
 	r := quiet(p, root)
 
@@ -175,7 +175,7 @@ func TestBothModesReachTheVerdictThroughOneComparison(t *testing.T) {
 // recorded — and it would move a ratchet that by construction never moves back.
 func TestACountArrivingWithAFractionalPartIsRefused(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 	p := counting("x", []Metric{Count("n")}, Measured{}, nil)
 	r, _ := run(t, p, root)
 

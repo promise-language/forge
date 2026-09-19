@@ -87,11 +87,11 @@ func TestEveryResultRendersForAPersonExceptTheWiresAnotherContractOwns(t *testin
 func TestAJudgedMeasurementPrintsBesideItsTerms(t *testing.T) {
 	read := Terms{
 		Caps: map[string]Cap{
-			"failed_tests": {Direction: Down, Cap: ptr(0.0)},
+			"failed_tests": {Direction: AtMost, Cap: ptr(0.0)},
 			// A metric may have both, and both are applied — so both are shown.
-			"statement_coverage": {Direction: Up, Cap: ptr(75.0)},
+			"statement_coverage": {Direction: AtLeast, Cap: ptr(75.0)},
 		},
-		Baselines: map[string]Baseline{"statement_coverage": {Direction: Up, Value: ptr(80.0)}},
+		Baselines: map[string]Baseline{"statement_coverage": {Direction: AtLeast, Value: ptr(80.0)}},
 	}
 	env := Envelope{
 		Gate: "x", Target: HostTarget(),
@@ -105,8 +105,8 @@ func TestAJudgedMeasurementPrintsBesideItsTerms(t *testing.T) {
 	}
 
 	body := render(env, read)
-	for _, says := range []string{"failed_tests", "cap down 0", "✗", "91.5%",
-		"cap up 75, baseline up 80", "✓",
+	for _, says := range []string{"failed_tests", "cap at_most 0", "✗", "91.5%",
+		"cap at_least 75, baseline at_least 80", "✓",
 		"test_count", "not judged", "4096 B", "incomplete", "never moves a baseline"} {
 		if !strings.Contains(body, says) {
 			t.Errorf("the rendering does not say %q:\n%s", says, body)

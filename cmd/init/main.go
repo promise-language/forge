@@ -2690,10 +2690,9 @@ Provisioning delivers it. A checkout that has not been provisioned has no
 // The two command strings are EXACT, not a shape. A conformance checker compares
 // them byte-for-byte and reports any difference at error severity, so no wrapper
 // and no conditional may be added here. This is also the ONE piece of wiring the
-// scaffolder commits: a tracked settings file is what makes the guard live in a
-// fresh clone, before `workspace setup` has ever run there, where the hook that
-// reaches the commit guard is written by that provisioning run instead
-// (docs/blueprint.md, The commit gate hook).
+// scaffolder commits, where the hook that reaches the commit guard is not
+// scaffolded at all; why the two differ has one home and it is not this comment
+// (docs/blueprint.md, Tools the project does not build).
 const settingsJSON = `{
   "hooks": {
     "PostToolUse": [

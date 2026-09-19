@@ -1,12 +1,14 @@
 {
   "home": "promise-language/org",
-  "tag": "v1.0.0",
-  "commit": "524d3b2bdf8d6861bd92bd95c1dce24956ff1c79",
+  "tag": "v1.1.0",
+  "commit": "040df1f4a89564c3f5c3c9d38b6df298c01e0e21",
   "files": {
     "cli-guide.md": "614107d90aecd04dcb1759d44641e539dd7e793dedfe75dc80ef02259a28ee67",
     "engineering-guide-go.md": "a1f6205f971df6d08beeb7fb86a91abc7d0f1e8d2efc88ec56efb941d8f2bcf6",
     "engineering-guide-promise.md": "34df0bd09e17c546fe731afe03c4d63b86397965ab72620c06846c918c6a8173",
     "engineering-guide.md": "f46182338d8f82d3a4c721c257edfac6e2207f430d994c11bd1c651436bce46a",
+    "identity.md": "e73b12de1bb4f6e5b0a8c6c5058f7b18570dfa9e314e1b23d5d65fead291fad0",
+    "logging.md": "b960c6e1b5a89612c70c0cb62505d33086432ce41c7f857680011eb1633ac820",
     "normative.md": "4f0c7a0df476e716f593251931985d2d5becd7163a2e1632e0d81d0893eb0749"
   }
 }

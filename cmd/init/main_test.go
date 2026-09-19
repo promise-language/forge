@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/promise-language/forge/primitives/command"
+	"github.com/promise-language/forge/primitives/tooling"
 )
 
 func write(t *testing.T, dir, name, body string) {
@@ -234,6 +235,124 @@ func TestMissingIgnoreRulesReadsRulesNotText(t *testing.T) {
 	}
 	if got := missingIgnoreRules(all); len(got) != 0 {
 		t.Errorf("rules already present were reported missing: %v", got)
+	}
+}
+
+// One run writes both the emitted files and the .gitignore beside them, and the
+// two must not disagree: what the scaffolder emits, it emits to be COMMITTED.
+// `.claude/settings.json` is the case that makes this load-bearing — it is
+// committed precisely so the agent guard is live in a checkout provisioning has
+// never reached (docs/blueprint.md, Tools the project does not build), so a run
+// that emitted it into a tree ignoring it would produce exactly the state the
+// decision exists to prevent, and produce it silently: the file is on disk, the
+// scaffolder reports it written, and the clone carries no wiring at all.
+//
+// The per-clone sibling one directory apart is why a matcher is not enough.
+// `.claude/settings.local.json` IS ignored, and widening that entry to
+// `.claude/` — the spelling `bin/` and `.workspace/` already carry — passes every
+// other check in this file: the settings file is still emitted, no .githooks/
+// appears, the wiring still parses, and every path in perClonePaths is still in
+// the .gitignore, because the test for that is derived from the same list.
+//
+// git answers the question rather than a rule-matcher written here. A second
+// reading of .gitignore semantics is the copy that agrees with the
+// implementation and disagrees with the tool that actually decides.
+func TestNoEmittedFileIsIgnoredByTheGitignoreTheSameRunWrites(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	ignores := scaffoldedIgnores(t, true)
+
+	var emitted []string
+	for _, f := range files() {
+		emitted = append(emitted, f.path)
+	}
+	// check-ignore exits 0 when at least one path is ignored and names the ones
+	// that are; 1 when none is. Anything else is git refusing the question.
+	if out, code := ignores(emitted...); code == 0 {
+		t.Errorf("the scaffolder emits files its own .gitignore ignores, so a clone carries none of them:\n%s", out)
+	} else if code != 1 {
+		t.Fatalf("git check-ignore answered neither ignored nor tracked (%d):\n%s", code, out)
+	}
+
+	// The control. Without it a run where check-ignore matched nothing for a
+	// reason of its own — the wrong directory, a .gitignore that was never
+	// written — reads as every emitted file being tracked, which is the shape of
+	// a test that passes whatever the code does.
+	if out, code := ignores(".claude/settings.local.json"); code != 0 {
+		t.Errorf("the per-clone sibling is not ignored (%d), so the check above proves nothing:\n%s", code, out)
+	}
+}
+
+// The control above is only a control if it answers from the .gitignore the run
+// wrote. Asked of the same tree with that one step left out, it must report the
+// sibling TRACKED — and on a machine whose own excludes cover the path it will
+// not, which is the state this pair exists to catch. Without this test the
+// control passes on such a machine whatever ensureGitignore did, so the whole
+// check reads as coverage while asserting nothing about the repository.
+func TestTheSiblingIsIgnoredByTheScaffoldedRuleAndNothingElse(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	if out, code := scaffoldedIgnores(t, false)(".claude/settings.local.json"); code != 1 {
+		t.Errorf("with no .gitignore written, git still answers that the sibling is ignored (%d) — the rule came from outside the repository:\n%s", code, out)
+	}
+}
+
+// scaffoldedIgnores lays the emitted files down in a fresh git repository and
+// returns git's answer to "does this repository ignore these paths": the output,
+// and check-ignore's status. writeIgnores selects whether ensureGitignore runs,
+// which is the one difference between the check above and its own control.
+//
+// Every query is asked with the ignore sources OUTSIDE the repository out of the
+// way, because an ignore rule only counts when the repository carries it, and a
+// rule from the machine's global config does not (workspace's `bootstrap.md`,
+// Setup owns the installed name set). Left in, a developer's excludes file
+// answers for the repository: green here and red on the next machine, and a
+// failure that names a scaffolder defect nobody can reproduce.
+func scaffoldedIgnores(t *testing.T, writeIgnores bool) func(paths ...string) (string, int) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, f := range files() {
+		if _, err := writeFile(dir, f, "example/tools/build", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if writeIgnores {
+		if _, err := ensureGitignore(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A path that does not exist carries no patterns, and it is inside the temp
+	// tree so nothing outside can make it exist. Slashes, because that is the
+	// spelling git config reads on every OS this repository builds for.
+	noExcludes := "core.excludesFile=" + filepath.ToSlash(filepath.Join(dir, "no-such-excludes-file"))
+	git := func(args ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", noExcludes}, args...)...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		var status *exec.ExitError
+		if errors.As(err, &status) {
+			return string(out), status.ExitCode()
+		}
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return string(out), 0
+	}
+	if out, code := git("init"); code != 0 {
+		t.Fatalf("git init failed (%d):\n%s", code, out)
+	}
+	// The other source that is not a file the repository carries. A fresh init
+	// leaves it holding nothing but comments; emptying it states that rather than
+	// depending on it.
+	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return func(paths ...string) (string, int) {
+		t.Helper()
+		return git(append([]string{"check-ignore", "--"}, paths...)...)
 	}
 }
 
@@ -1322,7 +1441,7 @@ func keysOf(m map[string]bool) []string {
 
 // The wiring cmd/init commits into a target repository has one home, and it is
 // the constant that emits it (docs/blueprint.md, The agent guard): "The file's
-// text is the settingsJSON constant in cmd/init/main.go, which is what writes
+// text is the settingsJSON constant in cmd/init/main.go, which is what emits
 // it; this document does not carry a second copy of it", because "a prose copy
 // of the wiring is the first place the two spellings part company".
 // TestScaffoldedSettingsWireTheGuardOnBothEvents fixes what that constant says;
@@ -1489,6 +1608,49 @@ func TestScaffoldedSettingsWireTheGuardOnBothEvents(t *testing.T) {
 	}
 }
 
+// The same decision, applied to the tree it was taken in. `.claude/settings.json`
+// is provisioned AND committed, and the committing end is the project's
+// (docs/blueprint.md, Tools the project does not build) — this repository
+// included, since it is the first consumer of what it scaffolds
+// (docs/primitives.md, This repository is its own first consumer).
+//
+// Untracking it here would be invisible from every direction but the one that
+// matters. `workspace setup` rewrites the file on every run, so it stays on disk
+// in this checkout whatever git holds; the conformance that reads it reads the
+// settings in FORCE rather than the ones committed; and every other test in this
+// package reads the settingsJSON constant, never the tree. Only a fresh clone
+// finds out, by carrying no agent guard at all.
+//
+// Unlike the ignore checks above this one needs no control: the answer is
+// compared against the path, so a git that answers nothing — or answers about
+// something else — fails rather than passing as "tracked".
+func TestThisRepositoryCommitsTheAgentGuardWiring(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	git := func(args ...string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = filepath.Join("..", "..")
+		out, err := cmd.Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	// A source tree that is not a checkout — an extracted archive, a vendored
+	// copy — holds no answer to this question, and a failure there would name a
+	// defect that is not in the repository.
+	if _, err := git("rev-parse", "--is-inside-work-tree"); err != nil {
+		t.Skip("not a git checkout")
+	}
+	const wiring = ".claude/settings.json"
+	tracked, err := git("ls-files", "--", wiring)
+	if err != nil {
+		t.Fatalf("git ls-files %s: %v", wiring, err)
+	}
+	if tracked != wiring {
+		t.Errorf("git tracks %q for %s — provisioning writes that file and the project commits it, so a clone of this repository would carry no agent-guard wiring at all", tracked, wiring)
+	}
+}
+
 // A metric with no entry cannot fail, and an entry naming nothing is a term
 // that never applies. Either way the verdict is thinner than it reads, and a
 // verdict carrying no terms is one a conformance check refuses.
@@ -1514,6 +1676,26 @@ func TestScaffoldedThresholdsCapEveryStarterMetric(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(baselinesJSON), &manifest); err != nil {
 		t.Fatalf("the emitted baselines do not parse: %v", err)
+	}
+}
+
+// The terms the scaffolder emits are terms the judge reads. It is checked
+// through the library's own loader rather than against a second spelling of the
+// vocabulary here: a scaffolder and a judge that each held their own idea of
+// what a term looks like is exactly the state this guards against, and a
+// freshly scaffolded project whose first `bin/run` cannot judge its own terms
+// is a project born broken.
+func TestTheScaffoldedTermsAreTermsTheJudgeReads(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, filepath.FromSlash(tooling.ThresholdsFile), thresholdsJSON)
+	write(t, root, filepath.FromSlash(tooling.BaselinesFile), baselinesJSON)
+
+	read, err := tooling.LoadTerms(root)
+	if err != nil {
+		t.Fatalf("the judge refuses the terms the scaffolder emits: %v", err)
+	}
+	if len(read.Caps) == 0 {
+		t.Error("the emitted thresholds carry no cap the judge could apply")
 	}
 }
 

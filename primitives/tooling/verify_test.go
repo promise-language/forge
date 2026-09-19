@@ -62,7 +62,7 @@ func TestTheMeasureStageFollowsIntegration(t *testing.T) {
 // a failure ends the run, and the stages after it are reported as not run.
 func TestEveryStepInAStageRunsAndEveryFailureIsTallied(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, "{}")
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, "{}")
 
 	ran := map[string]bool{}
 	p := Standard()
@@ -157,7 +157,7 @@ func TestAGateNoTermJudgesFailsRatherThanPasses(t *testing.T) {
 // reads instead of re-running the gate by hand.
 func TestAMeasurementBeyondItsTermFailsTheStep(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 	p := counting("x", []Metric{Count("n")}, Measured{
 		Metrics: []Measurement{Counted("n", 2, "")},
 		Groups:  []Group{{Name: "root", Metrics: []Measurement{Counted("n", 2, "")}}},
@@ -181,7 +181,7 @@ func TestAMeasurementBeyondItsTermFailsTheStep(t *testing.T) {
 // improvement carries it.
 func TestAGreenRunMovesTheBaselineItEarned(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{}`, `{"n": {"direction": "up", "value": 3}}`)
+	terms(t, root, `{}`, `{"n": {"direction": "at_least", "value": 3}}`)
 	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 7, "")}}, nil)
 	p.Verify = Pipeline{}
 	p.Verify.AddStage(Stage{Name: StageMeasure, Steps: []Step{JudgedStep("x")}})
@@ -363,7 +363,7 @@ func TestOutsideACheckoutRecordingIsAReportedNoOp(t *testing.T) {
 // be committed, and a no is an answer — and the status says the answer was no.
 func TestVerifyWritesItsResultToStdoutAndItsProgressToStderr(t *testing.T) {
 	root := fixture(t, "")
-	terms(t, root, `{"n": {"direction": "down", "cap": 0}}`, `{}`)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0}}`, `{}`)
 	stamp := stamped(t, root)
 
 	p := counting("x", []Metric{Count("n")}, Measured{Metrics: []Measurement{Counted("n", 2, "")}}, nil)

@@ -14,6 +14,9 @@ line of customization.
   `tool-contract.md`, The two sets and Required tools.
 - **The envelope, the manifest, and what a runner may conclude from a gate.** That is base's
   `gate-contract.md`.
+- **Where the judging terms live and what is in them.** That is the same document, Caps and
+  baselines; workspace's `tool-contract.md`, Layout, is what places the two files in a managed
+  project.
 - **Which gates a flow asks for, and what a verdict must carry.** That is flow's
   `gates-and-commands.md`.
 - **How any tool parses, reports and exits.** That is [command-line.md](command-line.md), which
@@ -491,6 +494,10 @@ satisfied by construction:**
 - **Every term a metric has is applied**, cap and baseline alike, and every one must hold.
 - **An integer metric is compared as an integer.** A term that is not a whole number, for an integer
   metric, is a defect in the term. The judge cannot answer, rather than rounding.
+- **A property is judged by the comparison every other measurement is judged by**, with `false`
+  below `true` as base's `gate-contract.md`, What a metric declares, fixes it. A second comparison
+  written for properties would be a second answer to what a term means. What the verdict states is
+  `true` or `false`, never the order they were compared in.
 - **An incomplete run is never acceptable.**
 - **A metric with no term is reported as not judged**, and cannot fail.
 - **An envelope none of whose metrics has a term cannot be judged.** `run --verdict` writes nothing
@@ -507,34 +514,28 @@ satisfied by construction:**
 
 ```json
 {"acceptable": false,
- "thresholds": {"failed_tests": {"direction": "down", "cap": 0}},
+ "thresholds": {"failed_tests": {"direction": "at_most", "cap": 0}},
  "detail": "failed_tests is 2, cap 0, in tools-build. Fix the failing tests; bin/run tested:tools-build measures that module alone."}
 ```
 
 ## The terms
 
-> **A term a run may move is a baseline. A term only a person moves is a cap.** Caps live in
-> `tools/gates/thresholds.json`, and baselines in `tools/gates/baselines.json`. A metric may have
-> both, and when it does, they agree on direction.
+> **A term a run may move is a baseline. A term only a person moves is a cap.** That split is why
+> this implementation has both a judge and a ratchet.
 
-```json
-{"failed_tests":       {"direction": "down", "cap": 0},
- "worktree_free_bytes": {"direction": "up",   "cap": 1073741824}}
-```
+**Where the two files are and what their entries hold are base's `gate-contract.md`, Caps and
+baselines; what `direction` means and what a metric's `type` may be are that document's What a
+metric declares.** Workspace's `tool-contract.md`, Layout, is what places the two files in a managed
+project. This section defines none of it again, and does not restate it either — not the paths, not
+the entry shapes, not the words `direction` takes. A format with two homes is a format that will be
+written two ways, and the second home is the one that goes stale.
 
-```json
-{"test_count":         {"direction": "up", "value": 412},
- "statement_coverage": {"direction": "up", "targets": {"linux/amd64": 81.9, "darwin/arm64": 82.1}}}
-```
+What is here is how this library reads that definition.
 
-- **`direction` is base's vocabulary**, with the meaning that document gives it (gate-contract.md,
-  What a metric declares).
-- **A cap is a bound no history relaxes.**
-- **A baseline is the best value a complete, green run has recorded.**
-  - A baseline with a single `value` holds on every target.
-  - A metric that genuinely differs by platform records its baselines per target, under `targets`.
-- **The files are read strictly.** The judge refuses to answer, naming the file and the entry, when
-  an entry has an unknown key, a missing field, an unknown direction, or both `value` and `targets`.
+- **Nothing outside that definition is accepted.** The library reads the two files strictly, and the
+  judge refuses to answer, naming the file and the entry, when an entry has an unknown key, a
+  missing field, an unknown direction, or both `value` and `targets`.
+- **A metric may have both a cap and a baseline**, and when it does, they agree on direction.
 
 > **Only `verify` moves a baseline, and only forward.** After every measuring stage has passed, and
 > before the tree is recorded, `verify` moves each baseline whose metric it measured completely, in
@@ -622,7 +623,8 @@ its own first consumer), and copies no helper `primitives` carries:
   holds from its first commit (org/normative.md, Location). The corpus itself is not
   emitted: it reaches a project by sync, and a copy frozen into the scaffolder would be
   one no stamp checks;
-- the committed wiring for the agent guard, `.claude/settings.json`. It emits no `.githooks/`
+- the committed wiring for the agent guard, `.claude/settings.json`
+  ([blueprint.md](blueprint.md), Tools the project does not build). It emits no `.githooks/`
   wiring: the commit guard and the hook that reaches it are both `workspace setup`'s
   ([blueprint.md](blueprint.md), The commit gate hook);
 - the `.gitignore` entries [setup](#setup) requires.

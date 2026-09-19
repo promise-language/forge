@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -22,15 +23,23 @@ func TestTheTermFilesAreReadStrictly(t *testing.T) {
 		baselines  string
 		says       string
 	}{
-		{"an unknown key", `{"n": {"direction": "down", "cap": 0, "note": "x"}}`, noBaselines, "note"},
-		{"a missing field", `{"n": {"direction": "down"}}`, noBaselines, "states no cap"},
+		{"an unknown key", `{"n": {"direction": "at_most", "cap": 0, "note": "x"}}`, noBaselines, "note"},
+		{"a missing field", `{"n": {"direction": "at_most"}}`, noBaselines, "states no cap"},
 		{"no direction", `{"n": {"cap": 0}}`, noBaselines, "states no direction"},
 		{"an unknown direction", `{"n": {"direction": "sideways", "cap": 0}}`, noBaselines, "unknown direction"},
+		// The vocabulary this library once read is refused like any other
+		// unknown word, and the refusal names the two that are not. A project
+		// carrying the old spelling has to be told, because the alternative —
+		// reading `down` as a ceiling because that is what it used to mean —
+		// is a judge with two vocabularies and no way to say which one a file
+		// was written in.
+		{"a cap in the former vocabulary", `{"n": {"direction": "down", "cap": 0}}`, noBaselines, "unknown direction"},
+		{"a baseline in the former vocabulary", `{}`, `{"n": {"direction": "up", "value": 1}}`, "unknown direction"},
 		{"both a value and targets", `{}`,
-			`{"n": {"direction": "up", "value": 1, "targets": {"linux/amd64": 2}}}`, "both a value and targets"},
-		{"neither a value nor targets", `{}`, `{"n": {"direction": "up"}}`, "neither a value nor targets"},
+			`{"n": {"direction": "at_least", "value": 1, "targets": {"linux/amd64": 2}}}`, "both a value and targets"},
+		{"neither a value nor targets", `{}`, `{"n": {"direction": "at_least"}}`, "neither a value nor targets"},
 		{"two terms that disagree on direction",
-			`{"n": {"direction": "down", "cap": 0}}`, `{"n": {"direction": "up", "value": 1}}`, "agree on direction"},
+			`{"n": {"direction": "at_most", "cap": 0}}`, `{"n": {"direction": "at_least", "value": 1}}`, "agree on direction"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -46,13 +55,80 @@ func TestTheTermFilesAreReadStrictly(t *testing.T) {
 	}
 }
 
+// A refused direction names the two that are accepted, whether the entry holds
+// the wrong word or no word at all. The refusal is the only thing a project
+// holding the wrong word ever sees, so it has to carry the right one rather
+// than only the verdict that this one is wrong.
+func TestARefusedDirectionNamesTheTwoThatAreAccepted(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		thresholds string
+		says       []string
+	}{
+		{"a word the set does not hold", `{"n": {"direction": "down", "cap": 0}}`,
+			[]string{ThresholdsFile, `"n"`, `"down"`, `"at_most"`, `"at_least"`}},
+		{"no word at all", `{"n": {"cap": 0}}`,
+			[]string{ThresholdsFile, `"n"`, `"at_most"`, `"at_least"`}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			terms(t, root, c.thresholds, noBaselines)
+			_, err := LoadTerms(root)
+			if err == nil {
+				t.Fatal("the terms were accepted")
+			}
+			for _, says := range c.says {
+				if !strings.Contains(err.Error(), says) {
+					t.Errorf("the refusal is %q, want it to say %s", err, says)
+				}
+			}
+		})
+	}
+}
+
+// A term is the side of it a measurement must be on, inclusively: at_most 0
+// accepts 0 and at_least 75 accepts 75. The boundary is the only place the two
+// words differ from a strict comparison, and it is where a project reading the
+// vocabulary for the first time decides what its cap means.
+func TestAMeasurementAtItsTermIsWithinIt(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		thresholds string
+		measured   Measurement
+	}{
+		{"at_most accepts the cap itself",
+			`{"n": {"direction": "at_most", "cap": 0}}`, Counted("n", 0, "")},
+		{"at_least accepts the cap itself",
+			`{"n": {"direction": "at_least", "cap": 75}}`, Quantity("n", 75, "percent")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			terms(t, root, c.thresholds, noBaselines)
+			read, err := LoadTerms(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdict, err := Judge(Envelope{
+				Gate: "x", Target: HostTarget(),
+				Metrics: []Measurement{c.measured},
+			}, read, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !verdict.Acceptable {
+				t.Errorf("a measurement at its term was refused: %s", verdict.Detail)
+			}
+		})
+	}
+}
+
 // Every term a metric has is applied, cap and baseline alike, and every one
 // must hold.
 func TestEveryTermAMetricHasIsApplied(t *testing.T) {
 	root := t.TempDir()
 	terms(t, root,
-		`{"n": {"direction": "down", "cap": 10}}`,
-		`{"n": {"direction": "down", "value": 2}}`)
+		`{"n": {"direction": "at_most", "cap": 10}}`,
+		`{"n": {"direction": "at_most", "value": 2}}`)
 	read, err := LoadTerms(root)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +153,7 @@ func TestEveryTermAMetricHasIsApplied(t *testing.T) {
 // answer, rather than rounding.
 func TestAFractionalTermOnACountIsADefectInTheTerm(t *testing.T) {
 	root := t.TempDir()
-	terms(t, root, `{"n": {"direction": "down", "cap": 0.5}}`, noBaselines)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 0.5}}`, noBaselines)
 	read, err := LoadTerms(root)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +169,7 @@ func TestAFractionalTermOnACountIsADefectInTheTerm(t *testing.T) {
 // result.
 func TestAnIncompleteRunIsNeverAcceptable(t *testing.T) {
 	root := t.TempDir()
-	terms(t, root, `{"n": {"direction": "down", "cap": 10}}`, noBaselines)
+	terms(t, root, `{"n": {"direction": "at_most", "cap": 10}}`, noBaselines)
 	read, _ := LoadTerms(root)
 
 	verdict, err := Judge(Envelope{
@@ -117,7 +193,7 @@ func TestAnIncompleteRunIsNeverAcceptable(t *testing.T) {
 // nothing would be a pass no term granted.
 func TestAnEnvelopeNoTermTouchesCannotBeJudged(t *testing.T) {
 	root := t.TempDir()
-	terms(t, root, `{"other": {"direction": "down", "cap": 0}}`, noBaselines)
+	terms(t, root, `{"other": {"direction": "at_most", "cap": 0}}`, noBaselines)
 	read, _ := LoadTerms(root)
 
 	_, err := Judge(Envelope{Gate: "x", Metrics: []Measurement{Counted("n", 9, "")}}, read, "")
@@ -131,7 +207,7 @@ func TestAnEnvelopeNoTermTouchesCannotBeJudged(t *testing.T) {
 // number came from.
 func TestAFailingVerdictCarriesTheEvidenceAndTheRemediation(t *testing.T) {
 	root := t.TempDir()
-	terms(t, root, `{"failed_tests": {"direction": "down", "cap": 0}}`, noBaselines)
+	terms(t, root, `{"failed_tests": {"direction": "at_most", "cap": 0}}`, noBaselines)
 	read, _ := LoadTerms(root)
 
 	verdict, err := Judge(Envelope{
@@ -161,7 +237,7 @@ func TestAFailingVerdictCarriesTheEvidenceAndTheRemediation(t *testing.T) {
 // not.
 func TestTheEvidenceUnderAFloorIsTheUnitThatIsShort(t *testing.T) {
 	root := t.TempDir()
-	terms(t, root, `{"statement_coverage": {"direction": "up", "cap": 75}}`, noBaselines)
+	terms(t, root, `{"statement_coverage": {"direction": "at_least", "cap": 75}}`, noBaselines)
 	read, _ := LoadTerms(root)
 
 	verdict, err := Judge(Envelope{
@@ -183,10 +259,82 @@ func TestTheEvidenceUnderAFloorIsTheUnitThatIsShort(t *testing.T) {
 	}
 }
 
+// A property is judged by the same comparison every other measurement is.
+// False is worse than true, so at_least is "must be true" and at_most is "must
+// be false", and neither needs a rule of its own.
+func TestAPropertyIsJudgedByTheOneComparison(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		thresholds string
+		measured   bool
+		acceptable bool
+	}{
+		{"at_least 1 accepts true", `{"builds_wasm": {"direction": "at_least", "cap": 1}}`, true, true},
+		{"at_least 1 refuses false", `{"builds_wasm": {"direction": "at_least", "cap": 1}}`, false, false},
+		{"at_most 0 accepts false", `{"builds_wasm": {"direction": "at_most", "cap": 0}}`, false, true},
+		{"at_most 0 refuses true", `{"builds_wasm": {"direction": "at_most", "cap": 0}}`, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			terms(t, root, c.thresholds, noBaselines)
+			read, err := LoadTerms(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdict, err := Judge(Envelope{
+				Gate: "x", Target: HostTarget(),
+				Metrics: []Measurement{Reported("builds_wasm", c.measured)},
+			}, read, "build it for that target")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Acceptable != c.acceptable {
+				t.Errorf("acceptable = %v, want %v: %s", verdict.Acceptable, c.acceptable, verdict.Detail)
+			}
+			// The detail says true or false, never the one and zero the
+			// comparison ran on.
+			if !c.acceptable && !strings.Contains(verdict.Detail, strconv.FormatBool(c.measured)) {
+				t.Errorf("detail = %q, want it to state the property as it was measured", verdict.Detail)
+			}
+		})
+	}
+}
+
+// A bool ratchet is the strictest kind there is: once a property holds, a later
+// run saying it does not is a regression with no room to argue about degree.
+func TestAPropertyRatchetsToTrueAndNeverBack(t *testing.T) {
+	root := t.TempDir()
+	terms(t, root, `{}`, `{"builds_wasm": {"direction": "at_least", "value": 0}}`)
+
+	moved, err := Ratchet(root, []Envelope{{
+		Gate: "builds", Target: HostTarget(),
+		Metrics: []Measurement{Reported("builds_wasm", true)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moved) != 1 || readBaseline(t, root, "builds_wasm") != 1 {
+		t.Fatalf("the baseline is %v (%v), want the property recorded as holding",
+			readBaseline(t, root, "builds_wasm"), moved)
+	}
+
+	moved, err = Ratchet(root, []Envelope{{
+		Gate: "builds", Target: HostTarget(),
+		Metrics: []Measurement{Reported("builds_wasm", false)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moved) != 0 || readBaseline(t, root, "builds_wasm") != 1 {
+		t.Errorf("a run that lost the property moved the baseline to %v (%v)",
+			readBaseline(t, root, "builds_wasm"), moved)
+	}
+}
+
 // Only verify moves a baseline, and only forward.
 func TestARatchetMovesOnlyForward(t *testing.T) {
 	root := t.TempDir()
-	terms(t, root, `{}`, `{"cov": {"direction": "up", "value": 80}}`)
+	terms(t, root, `{}`, `{"cov": {"direction": "at_least", "value": 80}}`)
 
 	moved, err := Ratchet(root, []Envelope{{
 		Gate: "covered", Target: HostTarget(),
@@ -210,11 +358,39 @@ func TestARatchetMovesOnlyForward(t *testing.T) {
 	}
 }
 
+// The ratchet reads the baselines file itself, so the strict reading is its
+// reading too. This is the path a project upgrading the pinned library arrives
+// on with the former vocabulary still in the file, and it has to refuse: the
+// comparison falls through to the one at_least makes, so a baseline written
+// `up` would be moved and rewritten under a word the judge then will not read —
+// a ratchet advanced past a term nobody can apply, which by construction never
+// moves back.
+func TestARatchetRefusesABaselineItCannotRead(t *testing.T) {
+	root := t.TempDir()
+	terms(t, root, `{}`, `{"cov": {"direction": "up", "value": 80}}`)
+
+	moved, err := Ratchet(root, []Envelope{{
+		Gate: "covered", Target: HostTarget(),
+		Metrics: []Measurement{Quantity("cov", 91, "percent")},
+	}})
+	if err == nil {
+		t.Fatalf("the ratchet answered %v over a baseline it cannot read", moved)
+	}
+	for _, says := range []string{BaselinesFile, `"up"`, `"at_least"`} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal is %q, want it to say %s", err, says)
+		}
+	}
+	if got := readBaseline(t, root, "cov"); got != 80 {
+		t.Errorf("the file was rewritten to %v", got)
+	}
+}
+
 // An incomplete run moves nothing, and neither does a red one — a red run never
 // reaches the ratchet stage, and an incomplete one is refused here.
 func TestAnIncompleteRunMovesNoBaseline(t *testing.T) {
 	root := t.TempDir()
-	terms(t, root, `{}`, `{"cov": {"direction": "up", "value": 80}}`)
+	terms(t, root, `{}`, `{"cov": {"direction": "at_least", "value": 80}}`)
 
 	moved, err := Ratchet(root, []Envelope{{
 		Gate: "covered", Target: HostTarget(),
@@ -233,7 +409,7 @@ func TestAnIncompleteRunMovesNoBaseline(t *testing.T) {
 // target stays per target.
 func TestATargetWithNoRecordedValueIsRecorded(t *testing.T) {
 	root := t.TempDir()
-	terms(t, root, `{}`, `{"cov": {"direction": "up", "targets": {"linux/amd64": 81.9}}}`)
+	terms(t, root, `{}`, `{"cov": {"direction": "at_least", "targets": {"linux/amd64": 81.9}}}`)
 
 	if _, err := Ratchet(root, []Envelope{{
 		Gate: "covered", Target: "darwin/arm64",
@@ -280,7 +456,7 @@ func TestARunNeverAddsATerm(t *testing.T) {
 // A project with no ratchet has no baselines file, and that is not a defect.
 func TestAnAbsentBaselinesFileIsNotADefect(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, filepath.FromSlash(ThresholdsFile), `{"n": {"direction": "down", "cap": 0}}`)
+	write(t, root, filepath.FromSlash(ThresholdsFile), `{"n": {"direction": "at_most", "cap": 0}}`)
 	read, err := LoadTerms(root)
 	if err != nil {
 		t.Fatalf("a project with no baselines file was refused: %v", err)
