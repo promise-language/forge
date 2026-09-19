@@ -122,5 +122,13 @@ func TestInputFromAFile(t *testing.T) {
 			t.Errorf("status %d, want -force refused beside the help", got.status)
 		}
 		got.says(t, "stderr", got.errs, "-force is not accepted with -help")
+
+		// "args" is company the same way, so the closed parameter set is refused
+		// beside the help whichever half of it the file carried.
+		got = invoke(t, tool, []string{"-json-input", write(t, `{"help":true,"args":["web"]}`)}, Streams{OutIsTerminal: true})
+		if got.status != StatusMalformed {
+			t.Errorf("status %d, want the argument refused beside the help", got.status)
+		}
+		got.says(t, "stderr", got.errs, `"web" is not accepted with -help`)
 	})
 }

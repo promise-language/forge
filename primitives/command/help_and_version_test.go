@@ -66,6 +66,62 @@ func TestHelpAndVersion(t *testing.T) {
 		}
 	})
 
+	t.Run("every problem is reported, and each of them once", func(t *testing.T) {
+		withValue := toolWithFlag(
+			Flag{Name: "force", Type: Boolean, Description: "overwrite what is there"},
+			Flag{Name: "timeout", Type: Duration, Description: "how long"},
+		)
+		withValue.Root.Params = []Param{{Name: "target", Type: String, Arity: Optional, Description: "what to build"}}
+
+		// Refusing the company reports presence, never correctness. A flag the
+		// one pass already refused has the problem it has, and telling its
+		// operator a second time that it kept company names nothing they can
+		// act on separately.
+		for _, alreadyNamed := range []struct {
+			args []string
+			says string
+		}{
+			{[]string{"-help", "-force=true"}, "-force takes no value"},
+			{[]string{"-help", "-timeout"}, "-timeout was given no value"},
+			{[]string{"-help", "-timeout=1h30m"}, "-timeout \"1h30m\" is not a duration"},
+		} {
+			got := invoke(t, withValue, alreadyNamed.args, Streams{OutIsTerminal: true})
+			if got.status != StatusMalformed {
+				t.Errorf("%v exited %d, want %d", alreadyNamed.args, got.status, StatusMalformed)
+			}
+			got.says(t, "stderr", got.errs, alreadyNamed.says)
+			if strings.Contains(got.errs, "is not accepted with") {
+				t.Errorf("%v = %q, want the one problem the flag has", alreadyNamed.args, got.errs)
+			}
+		}
+
+		// A word naming a command is the path written after a flag, which is
+		// the problem it already has, and not company either.
+		withChild := toolWithFlag()
+		withChild.Root.Children = func() []Command {
+			return []Command{{Name: "sync", Summary: "sync it", Action: answered("synced")}}
+		}
+		got := invoke(t, withChild, []string{"-help", "sync"}, Streams{OutIsTerminal: true})
+		if got.status != StatusMalformed {
+			t.Errorf("status %d, want the path refused before the flag", got.status)
+		}
+		got.says(t, "stderr", got.errs, `"sync" is a command of "tool"`, "before every flag")
+		if strings.Contains(got.errs, "is not accepted with") {
+			t.Errorf("stderr = %q, want the one problem the word has", got.errs)
+		}
+
+		// The refusal is exhaustive like any other: the invocation is refused,
+		// not the list of what is wrong with it shortened.
+		got = invoke(t, withValue, []string{"-help", "-force", "-nonsense", "web"}, Streams{OutIsTerminal: true})
+		if got.status != StatusMalformed || got.out != "" {
+			t.Errorf("(%q, %d), want nothing done", got.out, got.status)
+		}
+		got.says(t, "stderr", got.errs,
+			"unknown flag -nonsense",
+			"-force is not accepted with -help",
+			`"web" is not accepted with -help`)
+	})
+
 	t.Run("what the invocation leaves out is not a problem", func(t *testing.T) {
 		// The required parameters are required of the invocation that runs the
 		// command, and the one asking what the command takes does not run it:
